@@ -1,18 +1,11 @@
 from pymongo import MongoClient
-from datetime import datetime
 
-client = MongoClient('mongodb://localhost:27017/')
-db = client['it_assets_db']
-assets = db['assets']
+# MongoDB Atlas connection
+MONGO_URI = "mongodb+srv://Minh:123@cluster0.vknafoi.mongodb.net/asset_management?retryWrites=true&w=majority"
+DB_NAME = "asset_management"
 
-# Thêm 1 document mock để tạo database + collection
-assets.insert_one({
-    "name": "Laptop Dell XPS",
-    "type": "Laptop",
-    "serial_number": "SN123456",
-    "status": "available",
-    "assigned_to": None,
-    "created_at": datetime.utcnow()
-})
+client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
 
-print("Database + collection created with 1 mock record")
+# Collection assets
+assets_collection = db["assets"]
