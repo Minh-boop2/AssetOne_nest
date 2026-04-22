@@ -1,9 +1,9 @@
 from flask import jsonify, request
-from .asset_service import list_assets, find_asset
+from .asset_service import list_assets, find_asset, delete_asset
 
 
 def register_assets_api_routes(app):
-    @app.route("/api/assets")
+    @app.route("/api/assets", methods=["GET"])
     def assets_api():
         page = request.args.get("page", 1, type=int)
         per_page = request.args.get("per_page", 10, type=int)
@@ -23,9 +23,22 @@ def register_assets_api_routes(app):
             )
         )
 
-    @app.route("/api/assets/<string:asset_id>")
+    @app.route("/api/assets/<string:asset_id>", methods=["GET", "DELETE"])
     def asset_detail_api(asset_id):
-        asset = find_asset(asset_id)
-        if not asset:
-            return jsonify({"message": "Asset not found"}), 404
-        return jsonify(asset)
+        if request.method == "GET":
+            asset = find_asset(asset_id)
+            if not asset:
+                return jsonify({"message": "Asset not found"}), 404
+            return jsonify(asset)
+
+        if request.method == "DELETE":
+            result = delete_asset(asset_id)
+
+            if not result["deleted"]:
+                return jsonify({"message": "Asset not found"}), 404
+
+            return jsonify({
+                "message": "Asset deleted successfully",
+                "asset_id": asset_id,
+                "deleted_count": result["deleted_count"]
+            }), 200

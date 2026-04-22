@@ -1,4 +1,4 @@
-from .asset_model import get_assets_paginated, get_asset_by_id
+from .asset_model import get_assets_paginated, get_asset_by_id, delete_asset_by_id
 
 
 def list_assets(page=1, per_page=10, search="", asset_type="Tất cả", department="Tất cả", status="Tất cả"):
@@ -14,3 +14,7 @@ def list_assets(page=1, per_page=10, search="", asset_type="Tất cả", departm
 
 def find_asset(asset_id):
     return get_asset_by_id(asset_id)
+
+
+def delete_asset(asset_id):
+    return delete_asset_by_id(asset_id)
