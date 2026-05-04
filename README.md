@@ -4,7 +4,7 @@ git fetch
 
 sau đó ghi lệnh
 
-git pull origin master
+git pull origin master-nest
 
 sau đó chỉ cần chạy ở dưới
 

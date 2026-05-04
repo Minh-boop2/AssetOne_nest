@@ -9,3 +9,4 @@ db = client[DB_NAME]
 
 # Collection assets
 assets_collection = db["assets"]
+assign_collection = db["assign"]
