@@ -3,6 +3,7 @@ from flask_cors import CORS
 
 from templates.asset.asset_controller import register_assets_api_routes
 from templates.assign.assign_controller import register_assign_api_routes
+from templates.user.user_controller import register_users_api_routes
 
 
 app = Flask(__name__)
@@ -10,6 +11,7 @@ CORS(app)
 
 register_assets_api_routes(app)
 register_assign_api_routes(app)
+register_users_api_routes(app)
 
 
 @app.route("/")
@@ -17,7 +19,8 @@ def home():
     return jsonify({
         "message": "Backend API is running",
         "assets_api": "/api/assets",
-        "assign_api": "/api/assign"
+        "assign_api": "/api/assign",
+        "users_api": "/api/users"
     })
 
 
