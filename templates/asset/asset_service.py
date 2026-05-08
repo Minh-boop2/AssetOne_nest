@@ -59,7 +59,7 @@ def normalize_type_code(value):
         if value in aliases:
             return code
 
-    return "other"
+    return value
 
 
 def normalize_status_code(value):
@@ -73,20 +73,17 @@ def normalize_status_code(value):
 
 
 def aliases_for_type(asset_type):
+    asset_type = (asset_type or "").strip()
+
     if not asset_type or asset_type == "Tất cả":
         return None
 
-    if asset_type == "other":
-        known_values = []
-
-        for aliases in TYPE_ALIASES.values():
-            known_values.extend(aliases)
-
-        return {"$nin": known_values}
-
     code = normalize_type_code(asset_type)
 
-    return TYPE_ALIASES.get(code, [asset_type])
+    if code in TYPE_ALIASES:
+        return TYPE_ALIASES.get(code, [asset_type])
+
+    return [asset_type]
 
 
 def aliases_for_status(status):
@@ -464,4 +461,27 @@ def add_many_assets(items):
         "ids": [str(item_id) for item_id in result.inserted_ids],
         "items": [normalize_asset(item) for item in created_items],
         "skipped_items": skipped_items,
+    }
+def get_asset_type_options():
+    cursor = find_assets_for_counts()
+
+    types = {}
+
+    for item in cursor:
+        raw_type = item.get("type") or item.get("category") or ""
+        type_value = normalize_type_code(raw_type)
+
+        if not type_value:
+            continue
+
+        types[type_value] = types.get(type_value, 0) + 1
+
+    return {
+        "items": [
+            {
+                "value": type_name,
+                "count": count,
+            }
+            for type_name, count in sorted(types.items())
+        ]
     }
