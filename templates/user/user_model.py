@@ -8,6 +8,10 @@ VALID_STATUS = ["HOAT_DONG", "NGUNG_HOAT_DONG"]
 
 VN_TZ = timezone(timedelta(hours=7))
 
+# Avatar mặc định
+# Hiện tại bạn đang để ảnh ở: img/default-avatar.jpg
+DEFAULT_AVATAR_URL = "/static/img/default-avatar.jpg"
+
 
 def now_vietnam():
     return datetime.now(VN_TZ)
@@ -40,6 +44,7 @@ def user_serializer(user):
         "floor": user.get("floor"),
         "role": user.get("role"),
         "status": user.get("status"),
+        "avatar_url": user.get("avatar_url") or DEFAULT_AVATAR_URL,
 
         # Dùng created_at làm ngày tham gia
         "created_at": format_datetime_vietnam(user.get("created_at")),
@@ -59,6 +64,7 @@ def create_user_model(data):
         "floor": data.get("floor"),
         "role": data.get("role", "NHAN_VIEN"),
         "status": data.get("status", "HOAT_DONG"),
+        "avatar_url": data.get("avatar_url") or DEFAULT_AVATAR_URL,
         "password_hash": generate_password_hash(data.get("password")),
         "created_at": now,
         "updated_at": now,
@@ -75,6 +81,7 @@ def update_user_model(data):
         "floor",
         "role",
         "status",
+        "avatar_url",
     ]
 
     update_data = {}
