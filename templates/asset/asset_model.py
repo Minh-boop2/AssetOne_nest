@@ -51,3 +51,12 @@ def asset_code_exists(asset_code):
     return assets_collection.find_one({
         "asset_code": asset_code
     }) is not None
+
+
+def update_asset_by_query(query, update_data):
+    return assets_collection.update_one(
+        query,
+        {
+            "$set": update_data
+        }
+    )

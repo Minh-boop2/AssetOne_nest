@@ -7,9 +7,9 @@ from .asset_service import (
     add_asset,
     add_many_assets,
     get_asset_type_options,
+    assign_asset,
+    unassign_asset,
 )
-
-
 
 
 def register_assets_api_routes(app):
@@ -22,7 +22,7 @@ def register_assets_api_routes(app):
         department = request.args.get("department", "Tất cả", type=str)
         status = request.args.get("status", "Tất cả", type=str)
 
-        return jsonify(     
+        return jsonify(
             list_assets(
                 page=page,
                 per_page=per_page,
@@ -32,11 +32,11 @@ def register_assets_api_routes(app):
                 status=status,
             )
         ), 200
-    
+
     @app.route("/api/assets/types", methods=["GET"])
     def asset_types_api():
         return jsonify(get_asset_type_options()), 200
-    
+
     @app.route("/api/assets", methods=["POST"])
     def create_asset_api():
         data = request.get_json(silent=True)
@@ -46,20 +46,26 @@ def register_assets_api_routes(app):
                 "message": "Missing JSON body or body is not an object"
             }), 400
 
-        # Mặc định khi tạo tài sản mới
-        # Trạng thái: Chưa sử dụng
-        # Chưa có người nhận, phòng ban, vị trí
+        # Tạo tài sản mới:
+        # - Chưa cấp phát cho ai
+        # - Chưa có phòng ban / vị trí
+        # - Trạng thái mặc định là Chưa sử dụng
         data["status"] = data.get("status") or "available"
-        data["user"] = data.get("user") or ""
-        data["receiver"] = data.get("receiver") or ""
-        data["department"] = data.get("department") or ""
-        data["location"] = data.get("location") or ""
+        data["user_id"] = ""
+        data["employee_code"] = ""
+        data["user"] = ""
+        data["receiver"] = ""
+        data["department"] = ""
+        data["location"] = ""
+        data["assigned_at"] = ""
+        data["returned_at"] = ""
 
         result = add_asset(data)
 
         if not result["created"]:
             return jsonify({
-                "message": result["message"]
+                "message": result["message"],
+                "errors": result.get("errors", {}),
             }), result.get("status_code", 400)
 
         return jsonify({
@@ -80,11 +86,16 @@ def register_assets_api_routes(app):
 
         for item in items:
             if isinstance(item, dict):
+                # Bulk tạo tài sản mới cũng không gán người dùng/phòng ban/vị trí.
                 item["status"] = item.get("status") or "available"
-                item["user"] = item.get("user") or ""
-                item["receiver"] = item.get("receiver") or ""
-                item["department"] = item.get("department") or ""
-                item["location"] = item.get("location") or ""
+                item["user_id"] = ""
+                item["employee_code"] = ""
+                item["user"] = ""
+                item["receiver"] = ""
+                item["department"] = ""
+                item["location"] = ""
+                item["assigned_at"] = ""
+                item["returned_at"] = ""
 
             normalized_items.append(item)
 
@@ -94,6 +105,7 @@ def register_assets_api_routes(app):
             return jsonify({
                 "message": result["message"],
                 "inserted_count": result.get("inserted_count", 0),
+                "skipped_items": result.get("skipped_items", []),
             }), result.get("status_code", 400)
 
         return jsonify({
@@ -101,6 +113,7 @@ def register_assets_api_routes(app):
             "inserted_count": result["inserted_count"],
             "ids": result["ids"],
             "items": result["items"],
+            "skipped_items": result.get("skipped_items", []),
         }), 201
 
     @app.route("/api/assets/<string:asset_id>", methods=["GET", "DELETE"])
@@ -128,3 +141,38 @@ def register_assets_api_routes(app):
                 "asset_id": asset_id,
                 "deleted_count": result["deleted_count"],
             }), 200
+
+    @app.route("/api/assets/<string:asset_id>/assign", methods=["PATCH"])
+    def assign_asset_api(asset_id):
+        data = request.get_json(silent=True)
+
+        if not data or not isinstance(data, dict):
+            return jsonify({
+                "message": "Body phải là object JSON. Cần gửi user_id, employee_code hoặc email."
+            }), 400
+
+        result = assign_asset(asset_id, data)
+
+        if not result["success"]:
+            return jsonify({
+                "message": result["message"]
+            }), result.get("status_code", 400)
+
+        return jsonify({
+            "message": result["message"],
+            "item": result["item"],
+        }), 200
+
+    @app.route("/api/assets/<string:asset_id>/unassign", methods=["PATCH"])
+    def unassign_asset_api(asset_id):
+        result = unassign_asset(asset_id)
+
+        if not result["success"]:
+            return jsonify({
+                "message": result["message"]
+            }), result.get("status_code", 400)
+
+        return jsonify({
+            "message": result["message"],
+            "item": result["item"],
+        }), 200
