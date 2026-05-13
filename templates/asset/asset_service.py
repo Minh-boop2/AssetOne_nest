@@ -45,6 +45,21 @@ TYPE_ALIASES = {
     "monitor": ["monitor", "Monitor", "Màn hình", "Man hinh"],
     "phone": ["phone", "Phone", "Điện thoại", "Dien thoai"],
     "projector": ["projector", "Projector", "Máy chiếu", "May chieu"],
+
+    "scanner": ["scanner", "Scanner", "Máy quét", "May quet"],
+    "network": ["network", "Network", "Thiết bị mạng", "Thiet bi mang"],
+    "ups": ["ups", "UPS"],
+    "camera": ["camera", "Camera", "Webcam", "webcam"],
+    "speaker": ["speaker", "Speaker", "Loa"],
+    "microphone": ["microphone", "Microphone", "Micro", "mic"],
+    "keyboard": ["keyboard", "Keyboard", "Bàn phím", "Ban phim"],
+    "mouse": ["mouse", "Mouse", "Chuột", "Chuot"],
+    "tablet": ["tablet", "Tablet", "Máy tính bảng", "May tinh bang"],
+    "server": ["server", "Server", "Máy chủ", "May chu"],
+    "router": ["router", "Router"],
+    "switch": ["switch", "Switch"],
+    "storage": ["storage", "Storage", "Ổ cứng", "O cung", "NAS", "nas"],
+    "accessory": ["accessory", "Accessory", "Phụ kiện", "Phu kien"],
 }
 
 
@@ -287,13 +302,6 @@ def build_asset_id_query(asset_id):
 def get_asset_filter_counts():
     type_counts = {
         "all": 0,
-        "laptop": 0,
-        "pc": 0,
-        "printer": 0,
-        "monitor": 0,
-        "phone": 0,
-        "projector": 0,
-        "other": 0,
     }
 
     status_counts = {
@@ -317,9 +325,6 @@ def get_asset_filter_counts():
         if not type_code:
             type_code = "other"
 
-        if type_code not in type_counts:
-            type_code = "other"
-
         if status_code not in status_counts:
             status_code = "pending"
 
@@ -328,6 +333,8 @@ def get_asset_filter_counts():
         department_counts["all"] += 1
         location_counts["all"] += 1
 
+        # Không gom type lạ vào "other" nữa.
+        # scanner, network, ups, camera, tablet, server... sẽ hiện riêng.
         type_counts[type_code] = type_counts.get(type_code, 0) + 1
         status_counts[status_code] = status_counts.get(status_code, 0) + 1
 
@@ -346,7 +353,6 @@ def get_asset_filter_counts():
         "department": department_counts,
         "location": location_counts,
     }
-
 
 def list_assets(
     page=1,
