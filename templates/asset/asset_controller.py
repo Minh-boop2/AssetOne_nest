@@ -13,6 +13,7 @@ from .asset_service import (
 
 
 def register_assets_api_routes(app):
+    # phân trang và lọc tài sản
     @app.route("/api/assets", methods=["GET"])
     def assets_api():
         page = request.args.get("page", 1, type=int)
@@ -33,10 +34,12 @@ def register_assets_api_routes(app):
             )
         ), 200
 
+    # lấy danh sách loại tài sản
     @app.route("/api/assets/types", methods=["GET"])
     def asset_types_api():
         return jsonify(get_asset_type_options()), 200
 
+    # tạo tài sản mới đơn lẻ
     @app.route("/api/assets", methods=["POST"])
     def create_asset_api():
         data = request.get_json(silent=True)
@@ -73,6 +76,7 @@ def register_assets_api_routes(app):
             "item": result["item"],
         }), 201
 
+    # tạo nhiều tài sản cùng lúc
     @app.route("/api/assets/bulk", methods=["POST"])
     def create_many_assets_api():
         items = request.get_json(silent=True)
@@ -116,6 +120,7 @@ def register_assets_api_routes(app):
             "skipped_items": result.get("skipped_items", []),
         }), 201
 
+    # chi tiết tài sản hoặc xóa tài sản
     @app.route("/api/assets/<string:asset_id>", methods=["GET", "DELETE"])
     def asset_detail_api(asset_id):
         if request.method == "GET":
@@ -142,6 +147,7 @@ def register_assets_api_routes(app):
                 "deleted_count": result["deleted_count"],
             }), 200
 
+    # gán tài sản cho người dùng
     @app.route("/api/assets/<string:asset_id>/assign", methods=["PATCH"])
     def assign_asset_api(asset_id):
         data = request.get_json(silent=True)
@@ -163,6 +169,7 @@ def register_assets_api_routes(app):
             "item": result["item"],
         }), 200
 
+    # hủy gán tài sản
     @app.route("/api/assets/<string:asset_id>/unassign", methods=["PATCH"])
     def unassign_asset_api(asset_id):
         result = unassign_asset(asset_id)

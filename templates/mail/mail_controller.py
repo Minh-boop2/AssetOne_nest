@@ -9,6 +9,7 @@ from templates.mail.mail_service import (
 
 def register_mail_api_routes(app):
 
+    # API yêu cầu gửi link đặt lại mật khẩu qua Gmail
     @app.route("/api/mail/forgot-password", methods=["POST"])
     def api_forgot_password():
         data = request.get_json(silent=True) or {}
@@ -17,12 +18,14 @@ def register_mail_api_routes(app):
 
         return jsonify(result), status_code
 
+    # API kiểm tra token đặt lại mật khẩu còn hợp lệ hay không
     @app.route("/api/mail/reset-password/verify/<string:token>", methods=["GET"])
     def api_verify_reset_password_token(token):
         result, status_code = verify_reset_password_token(token)
 
         return jsonify(result), status_code
 
+    # API đặt lại mật khẩu mới
     @app.route("/api/mail/reset-password", methods=["POST"])
     def api_reset_password():
         data = request.get_json(silent=True) or {}

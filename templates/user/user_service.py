@@ -13,6 +13,8 @@ from templates.user.user_model import (
 )
 
 
+# Tạo user mới
+# Kiểm tra dữ liệu bắt buộc, role, trạng thái và trùng mã nhân viên/email trước khi lưu
 def create_user(data):
     if data is None:
         data = {}
@@ -69,6 +71,8 @@ def create_user(data):
     }, 201
 
 
+# Lấy danh sách user
+# Có hỗ trợ phân trang, tìm kiếm và lọc theo role, trạng thái, phòng ban, tầng
 def get_users(args):
     try:
         page = int(args.get("page", 1))
@@ -146,6 +150,7 @@ def get_users(args):
     }, 200
 
 
+# Lấy chi tiết một user theo id
 def get_user_by_id(id):
     if not is_valid_object_id(id):
         return {
@@ -168,6 +173,8 @@ def get_user_by_id(id):
     }, 200
 
 
+# Cập nhật thông tin user theo id
+# Có kiểm tra id, user tồn tại, role, trạng thái và trùng mã nhân viên/email
 def update_user(id, data):
     if data is None:
         data = {}
@@ -254,6 +261,7 @@ def update_user(id, data):
     }, 200
 
 
+# Xóa user theo id
 def delete_user(id):
     if not is_valid_object_id(id):
         return {
@@ -277,6 +285,8 @@ def delete_user(id):
     }, 200
 
 
+# Đăng nhập user
+# Kiểm tra email, mật khẩu, password_hash và trạng thái tài khoản
 def login_user(data):
     if data is None:
         data = {}
@@ -323,6 +333,10 @@ def login_user(data):
         "message": "Đăng nhập thành công",
         "data": user_serializer(user)
     }, 200
+
+
+# Đếm số lượng user theo một field bất kỳ
+# Ví dụ: đếm theo role, status, department hoặc floor
 def aggregate_counts(field_name):
     pipeline = [
         {
@@ -354,6 +368,8 @@ def aggregate_counts(field_name):
     }
 
 
+# Lấy thống kê tổng quan user
+# Bao gồm tổng user, số lượng theo role, trạng thái, phòng ban và tầng
 def get_users_stats():
     total = users_collection.count_documents({})
 

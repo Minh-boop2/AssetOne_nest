@@ -11,6 +11,8 @@ from .assign_service import (
 
 def register_assign_api_routes(app):
 
+    # Lấy danh sách cấp phát tài sản
+    # Có hỗ trợ phân trang, tìm kiếm và lọc theo loại, phòng ban, trạng thái, vị trí
     @app.route("/api/assign", methods=["GET"])
     def assigns_api():
         page = request.args.get("page", 1, type=int)
@@ -35,6 +37,7 @@ def register_assign_api_routes(app):
             )
         )
 
+    # Xem chi tiết hoặc xóa một bản ghi cấp phát
     @app.route("/api/assign/<string:assign_id>", methods=["GET", "DELETE"])
     def assign_detail_api(assign_id):
         if request.method == "GET":
@@ -57,6 +60,7 @@ def register_assign_api_routes(app):
                 "deleted_count": result["deleted_count"],
             }), 200
 
+    # Duyệt yêu cầu cấp phát tài sản
     @app.route("/api/assign/<string:assign_id>/approve", methods=["PATCH", "POST"])
     def assign_approve_api(assign_id):
         result = approve_assign(assign_id)
@@ -71,6 +75,7 @@ def register_assign_api_routes(app):
             "item": result["item"],
         }), 200
 
+    # Từ chối yêu cầu cấp phát tài sản
     @app.route("/api/assign/<string:assign_id>/reject", methods=["PATCH", "POST"])
     def assign_reject_api(assign_id):
         result = reject_assign(assign_id)
@@ -85,6 +90,7 @@ def register_assign_api_routes(app):
             "item": result["item"],
         }), 200
 
+    # Cập nhật trạng thái của bản ghi cấp phát
     @app.route("/api/assign/<string:assign_id>/status", methods=["PATCH"])
     def assign_update_status_api(assign_id):
         body = request.get_json(silent=True) or {}

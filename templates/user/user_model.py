@@ -3,9 +3,13 @@ from bson import ObjectId
 from werkzeug.security import generate_password_hash
 
 
+# Danh sách role hợp lệ của user
 VALID_ROLES = ["ADMIN", "QUAN_LY", "NHAN_VIEN"]
+
+# Danh sách trạng thái hợp lệ của user
 VALID_STATUS = ["HOAT_DONG", "NGUNG_HOAT_DONG"]
 
+# Múi giờ Việt Nam UTC+7
 VN_TZ = timezone(timedelta(hours=7))
 
 # Avatar mặc định
@@ -13,10 +17,12 @@ VN_TZ = timezone(timedelta(hours=7))
 DEFAULT_AVATAR_URL = "/static/img/default-avatar.jpg"
 
 
+# Lấy thời gian hiện tại theo múi giờ Việt Nam
 def now_vietnam():
     return datetime.now(VN_TZ)
 
 
+# Đổi thời gian sang định dạng ngày giờ Việt Nam để hiển thị
 def format_datetime_vietnam(value):
     if not value:
         return None
@@ -33,6 +39,7 @@ def format_datetime_vietnam(value):
     return vietnam_time.strftime("%d/%m/%Y %H:%M")
 
 
+# Chuyển dữ liệu user từ MongoDB sang dạng dễ dùng cho frontend
 def user_serializer(user):
     return {
         "id": str(user["_id"]),
@@ -52,6 +59,7 @@ def user_serializer(user):
     }
 
 
+# Tạo dữ liệu user mới trước khi lưu vào database
 def create_user_model(data):
     now = now_vietnam()
 
@@ -71,6 +79,8 @@ def create_user_model(data):
     }
 
 
+# Tạo dữ liệu cập nhật user
+# Chỉ cho phép cập nhật các field có trong allowed_fields
 def update_user_model(data):
     allowed_fields = [
         "employee_code",
@@ -95,5 +105,6 @@ def update_user_model(data):
     return update_data
 
 
+# Kiểm tra id có phải ObjectId hợp lệ của MongoDB hay không
 def is_valid_object_id(id):
     return ObjectId.is_valid(id)

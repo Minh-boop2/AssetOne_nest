@@ -12,6 +12,7 @@ from .assign_model import (
 )
 
 
+# Những cột sẽ được dùng khi người dùng nhập từ khóa tìm kiếm cấp phát
 SEARCH_FIELDS = [
     "asset_name",
     "asset",
@@ -29,10 +30,14 @@ SEARCH_FIELDS = [
 ]
 
 
+# Những trạng thái trong bảng assets được hiểu là tài sản đang được sử dụng
 USING_STATUS_VALUES = ["using", "Đang sử dụng"]
+
+# Những trạng thái trong bảng assets được hiểu là tài sản chưa được sử dụng
 UNUSED_STATUS_VALUES = ["available", "Chưa sử dụng"]
 
 
+# Đổi trạng thái của asset sang trạng thái hiển thị bên màn cấp phát
 def map_asset_status_to_assign_status(status):
     status = (status or "").strip()
 
@@ -45,6 +50,8 @@ def map_asset_status_to_assign_status(status):
     return None
 
 
+# Đổi trạng thái người dùng chọn ở màn cấp phát thành danh sách trạng thái trong assets
+# Dùng để lọc dữ liệu đúng trong database
 def map_assign_status_to_asset_status_values(status):
     status = (status or "").strip()
 
@@ -60,6 +67,7 @@ def map_assign_status_to_asset_status_values(status):
     return []
 
 
+# Lấy dữ liệu từ assets rồi đổi sang dạng dữ liệu mà màn cấp phát cần dùng
 def normalize_assign_from_asset(item):
     row = dict(item)
 
@@ -99,6 +107,8 @@ def normalize_assign_from_asset(item):
     }
 
 
+# Tạo điều kiện tìm một bản ghi cấp phát
+# Có thể tìm bằng _id, asset_code hoặc id
 def build_id_query(asset_id):
     queries = [
         {"asset_code": asset_id},
@@ -111,6 +121,8 @@ def build_id_query(asset_id):
     return {"$or": queries}
 
 
+# Tạo điều kiện lọc danh sách cấp phát
+# Có thể lọc theo tìm kiếm, loại tài sản, phòng ban, trạng thái và vị trí
 def build_assign_query(
     search="",
     asset_type="Tất cả",
@@ -162,6 +174,8 @@ def build_assign_query(
     return {"$and": conditions}
 
 
+# Đếm số lượng bản ghi cấp phát theo loại, phòng ban, vị trí và trạng thái
+# Dữ liệu này dùng cho bộ lọc và thống kê nhanh trên giao diện
 def get_assign_filter_counts():
     base_query = {
         "status": {
@@ -207,6 +221,7 @@ def get_assign_filter_counts():
     }
 
 
+# Lấy danh sách cấp phát có phân trang, tìm kiếm, lọc và thống kê bộ lọc
 def list_assigns(
     page=1,
     per_page=10,
@@ -264,6 +279,7 @@ def list_assigns(
     }
 
 
+# Tìm một bản ghi cấp phát theo id, mã tài sản hoặc mongo id
 def find_assign(assign_id):
     item = find_assign_asset_by_query(build_id_query(assign_id))
 
@@ -278,6 +294,7 @@ def find_assign(assign_id):
     return row
 
 
+# Xóa một bản ghi cấp phát
 def delete_assign(assign_id):
     # Cẩn thận: assign đang là view từ assets.
     # Nếu gọi delete thì sẽ xóa asset.
@@ -289,6 +306,8 @@ def delete_assign(assign_id):
     }
 
 
+# Cập nhật trạng thái cấp phát theo id
+# Trạng thái cấp phát sẽ được đổi ngược lại thành trạng thái trong assets
 def update_assign_status_by_id(assign_id, assign_status):
     if assign_status == "Đang sử dụng":
         asset_status = "Đang sử dụng"
@@ -320,13 +339,16 @@ def update_assign_status_by_id(assign_id, assign_status):
     }
 
 
+# Duyệt cấp phát, chuyển trạng thái sang đang sử dụng
 def approve_assign(assign_id):
     return update_assign_status_by_id(assign_id, "Đang sử dụng")
 
 
+# Từ chối hoặc hủy cấp phát, chuyển trạng thái sang chưa dùng
 def reject_assign(assign_id):
     return update_assign_status_by_id(assign_id, "Chưa dùng")
 
 
+# Cập nhật trạng thái cấp phát theo trạng thái được gửi lên
 def update_assign_status(assign_id, status):
     return update_assign_status_by_id(assign_id, status)

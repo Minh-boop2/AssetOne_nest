@@ -19,6 +19,7 @@ from .asset_model import (
 )
 
 
+# Những cột sẽ được dùng khi người dùng nhập từ khóa tìm kiếm tài sản
 SEARCH_FIELDS = [
     "asset_name",
     "asset",
@@ -38,6 +39,8 @@ SEARCH_FIELDS = [
 ]
 
 
+# Gom nhiều cách viết loại tài sản về cùng một mã chung
+# Ví dụ: Laptop, LAPTOP, laptop đều được hiểu là "laptop"
 TYPE_ALIASES = {
     "laptop": ["laptop", "Laptop", "LAPTOP"],
     "pc": ["pc", "PC", "Máy tính bàn", "May tinh ban", "Desktop", "desktop"],
@@ -63,6 +66,8 @@ TYPE_ALIASES = {
 }
 
 
+# Gom nhiều cách viết trạng thái về cùng một mã chung
+# Ví dụ: "Đang sử dụng", "Dang su dung", "Hoàn thành" đều được hiểu là "using"
 STATUS_ALIASES = {
     "using": ["using", "Đang sử dụng", "Dang su dung", "Hoàn thành"],
     "available": ["available", "Chưa sử dụng", "Chua su dung"],
@@ -72,6 +77,7 @@ STATUS_ALIASES = {
 }
 
 
+# Tên trạng thái dùng để hiển thị ra giao diện
 STATUS_LABELS = {
     "using": "Đang sử dụng",
     "available": "Chưa sử dụng",
@@ -81,6 +87,7 @@ STATUS_LABELS = {
 }
 
 
+# Class CSS tương ứng với từng trạng thái để frontend hiển thị màu badge
 STATUS_BADGE_CLASSES = {
     "using": "status-using",
     "available": "status-free",
@@ -90,6 +97,7 @@ STATUS_BADGE_CLASSES = {
 }
 
 
+# Đổi ngày giờ từ kiểu datetime sang chuỗi để trả JSON không bị lỗi
 def serialize_datetime(value):
     if not value:
         return ""
@@ -100,6 +108,8 @@ def serialize_datetime(value):
     return value
 
 
+# Nếu người dùng nhập nhiều kiểu tên loại tài sản khác nhau,
+# hệ thống sẽ đổi về một mã chung
 def normalize_type_code(value):
     value = (value or "").strip()
 
@@ -110,6 +120,8 @@ def normalize_type_code(value):
     return value
 
 
+# Nếu người dùng nhập trạng thái bằng tiếng Việt hoặc tiếng Anh,
+# hệ thống sẽ đổi về một mã trạng thái chung
 def normalize_status_code(value):
     value = (value or "").strip()
 
@@ -120,6 +132,8 @@ def normalize_status_code(value):
     return "pending"
 
 
+# Lấy tất cả cách viết tương đương của một loại tài sản
+# Dùng để khi lọc không bị thiếu dữ liệu do khác cách viết
 def aliases_for_type(asset_type):
     asset_type = (asset_type or "").strip()
 
@@ -134,6 +148,8 @@ def aliases_for_type(asset_type):
     return [asset_type]
 
 
+# Lấy tất cả cách viết tương đương của một trạng thái
+# Dùng để khi lọc không bị thiếu dữ liệu do khác cách viết
 def aliases_for_status(status):
     if not status or status == "Tất cả":
         return None
@@ -143,6 +159,8 @@ def aliases_for_status(status):
     return STATUS_ALIASES.get(code, [status])
 
 
+# Sửa dữ liệu tài sản lấy từ database về dạng dễ dùng cho frontend
+# Ví dụ: _id đổi thành id, asset/asset_name dùng chung, user/receiver dùng chung
 def normalize_asset(item):
     row = dict(item)
 
@@ -185,6 +203,8 @@ def normalize_asset(item):
     return row
 
 
+# Sửa dữ liệu người dùng gửi lên trước khi lưu vào database
+# Mục đích là đảm bảo các field quan trọng luôn có giá trị thống nhất
 def normalize_asset_payload(data):
     data = dict(data)
 
@@ -229,6 +249,7 @@ def normalize_asset_payload(data):
     return data
 
 
+# Kiểm tra dữ liệu tài sản có thiếu thông tin bắt buộc hay không
 def validate_asset_payload(data):
     errors = {}
 
@@ -247,6 +268,7 @@ def validate_asset_payload(data):
     return errors
 
 
+# Tạo điều kiện lọc tài sản theo từ khóa, loại tài sản, phòng ban và trạng thái
 def build_asset_query(
     search="",
     asset_type="Tất cả",
@@ -292,6 +314,8 @@ def build_asset_query(
     return {"$and": conditions}
 
 
+# Tạo điều kiện tìm tài sản
+# Nếu asset_id là ObjectId hợp lệ thì tìm theo _id, nếu không thì tìm theo asset_code
 def build_asset_id_query(asset_id):
     if ObjectId.is_valid(asset_id):
         return {"_id": ObjectId(asset_id)}
@@ -299,6 +323,8 @@ def build_asset_id_query(asset_id):
     return {"asset_code": asset_id}
 
 
+# Đếm số lượng tài sản theo loại, trạng thái, phòng ban và vị trí
+# Dữ liệu này thường dùng cho bộ lọc hoặc thống kê nhanh trên giao diện
 def get_asset_filter_counts():
     type_counts = {
         "all": 0,
@@ -354,6 +380,7 @@ def get_asset_filter_counts():
         "location": location_counts,
     }
 
+# Lấy danh sách tài sản có phân trang, tìm kiếm, lọc và thống kê bộ lọc
 def list_assets(
     page=1,
     per_page=10,
@@ -402,6 +429,7 @@ def list_assets(
     }
 
 
+# Tìm một tài sản theo id hoặc mã tài sản
 def find_asset(asset_id):
     query = build_asset_id_query(asset_id)
     item = find_asset_by_query(query)
@@ -412,6 +440,7 @@ def find_asset(asset_id):
     return normalize_asset(item)
 
 
+# Xóa một tài sản theo id hoặc mã tài sản
 def delete_asset(asset_id):
     query = build_asset_id_query(asset_id)
     result = delete_asset_by_query(query)
@@ -422,6 +451,7 @@ def delete_asset(asset_id):
     }
 
 
+# Thêm một tài sản mới vào database
 def add_asset(data):
     data = normalize_asset_payload(data)
     errors = validate_asset_payload(data)
@@ -450,6 +480,8 @@ def add_asset(data):
     }
 
 
+# Thêm nhiều tài sản cùng lúc
+# Item lỗi sẽ bị bỏ qua và ghi vào skipped_items
 def add_many_assets(items):
     if not isinstance(items, list):
         return {
@@ -534,6 +566,7 @@ def add_many_assets(items):
     }
 
 
+# Lấy danh sách loại tài sản hiện có kèm số lượng của từng loại
 def get_asset_type_options():
     cursor = find_assets_for_counts()
 
@@ -559,6 +592,8 @@ def get_asset_type_options():
     }
 
 
+# Tìm người dùng để cấp phát tài sản
+# Có thể tìm bằng user_id, employee_code hoặc email
 def find_user_for_assign(data):
     data = data or {}
 
@@ -578,6 +613,8 @@ def find_user_for_assign(data):
     return None
 
 
+# Cấp phát tài sản cho một người dùng
+# Khi cấp phát sẽ lấy thông tin người dùng để gán vào tài sản
 def assign_asset(asset_id, data):
     asset_query = build_asset_id_query(asset_id)
     asset = find_asset_by_query(asset_query)
@@ -632,6 +669,8 @@ def assign_asset(asset_id, data):
     }
 
 
+# Thu hồi tài sản khỏi người dùng
+# Sau khi thu hồi, tài sản trở về trạng thái chưa sử dụng
 def unassign_asset(asset_id):
     asset_query = build_asset_id_query(asset_id)
     asset = find_asset_by_query(asset_query)
@@ -669,6 +708,7 @@ def unassign_asset(asset_id):
     }
 
 
+# Tính phần trăm, nếu tổng bằng 0 thì trả về 0 để tránh lỗi chia cho 0
 def _percent(value, total):
     if not total:
         return 0
@@ -676,6 +716,8 @@ def _percent(value, total):
     return round((value / total) * 100)
 
 
+# Lấy dữ liệu tổng quan tài sản cho dashboard
+# Bao gồm số lượng theo trạng thái và danh sách tài sản mới nhất
 def get_dashboard_assets_overview(limit=4):
     try:
         limit = int(limit)

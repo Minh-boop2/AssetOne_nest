@@ -18,11 +18,16 @@ from templates.mail.mail_model import (
 )
 
 
+# Lấy thông tin Gmail và mật khẩu ứng dụng từ biến môi trường
 MAIL_USERNAME = os.getenv("MAIL_USERNAME")
 MAIL_APP_PASSWORD = os.getenv("MAIL_APP_PASSWORD")
+
+# Link frontend dùng để tạo đường dẫn reset password gửi qua Gmail
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://127.0.0.1:5000")
 
 
+# Lấy cấu hình Gmail từ file .env
+# Nếu App Password có khoảng trắng thì tự động bỏ khoảng trắng
 def get_mail_config():
     username = os.getenv("MAIL_USERNAME")
     app_password = os.getenv("MAIL_APP_PASSWORD")
@@ -33,6 +38,7 @@ def get_mail_config():
     return username, app_password
 
 
+# Gửi email chứa link đặt lại mật khẩu cho người dùng
 def send_reset_password_email(to_email, reset_link):
     mail_username, mail_app_password = get_mail_config()
 
@@ -122,6 +128,8 @@ AssetOne System
         return False, f"Lỗi gửi Gmail: {str(error)}"
 
 
+# Xử lý yêu cầu quên mật khẩu
+# Kiểm tra Gmail, tạo token, lưu token vào user và gửi link reset qua Gmail
 def request_forgot_password(data):
     is_valid, message, valid_data = validate_forgot_password_data(data)
 
@@ -167,6 +175,7 @@ def request_forgot_password(data):
     ), 200
 
 
+# Kiểm tra token reset password có tồn tại và còn hạn hay không
 def verify_reset_password_token(token):
     if not token:
         return error_response("Link đặt lại mật khẩu không hợp lệ"), 400
@@ -186,6 +195,8 @@ def verify_reset_password_token(token):
     return success_response("Token hợp lệ"), 200
 
 
+# Đặt lại mật khẩu mới cho người dùng
+# Sau khi đổi mật khẩu sẽ xóa token reset để không dùng lại được
 def reset_password(data):
     is_valid, message, valid_data = validate_reset_password_data(data)
 
