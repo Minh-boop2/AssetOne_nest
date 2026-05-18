@@ -2,7 +2,8 @@ from bson import ObjectId
 from pymongo import DESCENDING
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from mongo import users_collection
+from mongo import users_collection, permissions_collection
+
 from templates.user.user_model import (
     user_serializer,
     create_user_model,
@@ -11,6 +12,118 @@ from templates.user.user_model import (
     VALID_STATUS,
     is_valid_object_id,
 )
+
+from templates.permission.permission_model import (
+    ADMIN_ROLE,
+    PERMISSION_MODULES,
+    DEFAULT_ROLE_PERMISSIONS,
+)
+
+
+# Lấy quyền của role từ database.
+# Nếu database chưa có thì lấy quyền mặc định trong DEFAULT_ROLE_PERMISSIONS.
+def get_role_permissions_for_frontend(role):
+    if role == ADMIN_ROLE:
+        return "ALL"
+
+    permission_doc = permissions_collection.find_one({"role": role})
+
+    if permission_doc:
+        return permission_doc.get("permissions", {})
+
+    return DEFAULT_ROLE_PERMISSIONS.get(role, {})
+
+
+# Lấy danh sách action từ PERMISSION_MODULES.
+# Viết kiểu mềm để tránh lỗi nếu permission_model đang khai báo module hơi khác format.
+def get_module_action_map():
+    module_action_map = {}
+
+    for module in PERMISSION_MODULES:
+        if not isinstance(module, dict):
+            continue
+
+        module_key = (
+            module.get("key")
+            or module.get("module")
+            or module.get("value")
+            or module.get("name")
+        )
+
+        if not module_key:
+            continue
+
+        actions = module.get("actions", [])
+
+        action_keys = []
+
+        for action in actions:
+            if isinstance(action, dict):
+                action_key = (
+                    action.get("key")
+                    or action.get("action")
+                    or action.get("value")
+                    or action.get("name")
+                )
+
+                if action_key:
+                    action_keys.append(action_key)
+
+            elif isinstance(action, str):
+                action_keys.append(action)
+
+        module_action_map[module_key] = action_keys
+
+    return module_action_map
+
+
+# Tạo object can để frontend dùng ẩn/hiện nút.
+# Ví dụ:
+# can.users.view
+# can.users.create
+# can.users.update
+# can.users.delete
+def build_can_object(role, permissions):
+    can = {}
+
+    if role == ADMIN_ROLE or permissions == "ALL":
+        module_action_map = get_module_action_map()
+
+        for module_key, actions in module_action_map.items():
+            can[module_key] = {}
+
+            for action in actions:
+                can[module_key][action] = True
+
+        return can
+
+    if not isinstance(permissions, dict):
+        return can
+
+    for module_key, actions in permissions.items():
+        can[module_key] = {}
+
+        if not isinstance(actions, list):
+            continue
+
+        for action in actions:
+            can[module_key][action] = True
+
+    return can
+
+
+# Gắn quyền vào user trả về frontend sau login.
+def user_serializer_with_permissions(user):
+    data = user_serializer(user)
+
+    role = user.get("role")
+    permissions = get_role_permissions_for_frontend(role)
+
+    data["is_admin"] = role == ADMIN_ROLE
+    data["permissions"] = permissions
+    data["can"] = build_can_object(role, permissions)
+
+    return data
 
 
 # Tạo user mới
@@ -28,7 +141,7 @@ def create_user(data):
                 "message": f"Thiếu trường bắt buộc: {field}"
             }, 400
 
-    if len(data.get("password")) < 3:
+    if len(data.get("password")) < 6:
         return {
             "success": False,
             "message": "Mật khẩu phải có ít nhất 6 ký tự"
@@ -76,12 +189,12 @@ def create_user(data):
 def get_users(args):
     try:
         page = int(args.get("page", 1))
-    except:
+    except Exception:
         page = 1
 
     try:
         limit = int(args.get("limit", 10))
-    except:
+    except Exception:
         limit = 10
 
     if page < 1:
@@ -286,7 +399,7 @@ def delete_user(id):
 
 
 # Đăng nhập user
-# Kiểm tra email, mật khẩu, password_hash và trạng thái tài khoản
+# Trả thêm permissions và can để frontend ẩn/hiện nút
 def login_user(data):
     if data is None:
         data = {}
@@ -331,7 +444,7 @@ def login_user(data):
     return {
         "success": True,
         "message": "Đăng nhập thành công",
-        "data": user_serializer(user)
+        "data": user_serializer_with_permissions(user)
     }, 200
 
 

@@ -9,7 +9,14 @@ VALID_PERMISSION_ROLES = ["QUAN_LY", "NHAN_VIEN"]
 ADMIN_ROLE = "ADMIN"
 
 # Các action dùng chung cho nhiều trang
-VALID_ACTIONS = ["view", "create", "update", "delete", "export", "approve"]
+VALID_ACTIONS = [
+    "view",
+    "create",
+    "update",
+    "delete",
+    "export",
+    "approve",
+]
 
 # Danh sách page/module trong hệ thống
 # Sau này có trang mới thì chỉ cần thêm vào đây
@@ -18,26 +25,50 @@ PERMISSION_MODULES = {
         "name": "Dashboard",
         "actions": ["view"]
     },
+
     "users": {
         "name": "Người dùng",
         "actions": ["view", "create", "update", "delete"]
     },
+
     "permissions": {
         "name": "Phân quyền",
         "actions": ["view", "update"]
     },
+
+    # Module tài sản
+    # Bắt buộc phải có vì asset_controller đang dùng:
+    # @permission_required("assets", "view")
+    # @permission_required("assets", "create")
+    # @permission_required("assets", "update")
+    # @permission_required("assets", "delete")
+    "assets": {
+        "name": "Tài sản",
+        "actions": ["view", "create", "update", "delete", "export"]
+    },
+
+    # Module cấp phát nếu sau này bạn tách riêng trang cấp phát
+    # Hiện tại assign/unassign trong asset_controller đang dùng quyền assets/update
+    "assign": {
+        "name": "Cấp phát",
+        "actions": ["view", "create", "update", "delete", "approve"]
+    },
+
     "employees": {
         "name": "Nhân viên",
         "actions": ["view", "create", "update", "delete", "export"]
     },
+
     "departments": {
         "name": "Phòng ban",
         "actions": ["view", "create", "update", "delete"]
     },
+
     "floors": {
         "name": "Tầng",
         "actions": ["view", "create", "update", "delete"]
     },
+
     "reports": {
         "name": "Báo cáo",
         "actions": ["view", "export"]
@@ -49,14 +80,30 @@ PERMISSION_MODULES = {
 DEFAULT_ROLE_PERMISSIONS = {
     "QUAN_LY": {
         "dashboard": ["view"],
+
+        # Quản lý được xem danh sách user, nhưng không nhất thiết được xóa user
         "users": ["view"],
+
+        # Quản lý thấy full tài sản và được thao tác tài sản
+        "assets": ["view", "create", "update", "delete", "export"],
+
+        # Nếu có trang cấp phát riêng thì dùng module này
+        "assign": ["view", "create", "update", "approve"],
+
         "employees": ["view", "create", "update", "export"],
         "departments": ["view"],
         "floors": ["view"],
         "reports": ["view", "export"],
     },
+
     "NHAN_VIEN": {
         "dashboard": ["view"],
+
+        # Quan trọng:
+        # Nhân viên phải có assets/view để vào trang tài sản.
+        # Backend asset_service sẽ tự lọc chỉ thấy tài sản của chính nhân viên đó.
+        "assets": ["view"],
+
         "employees": ["view"],
         "reports": ["view"],
     }

@@ -19,7 +19,6 @@ from .asset_model import (
 )
 
 
-# Những cột sẽ được dùng khi người dùng nhập từ khóa tìm kiếm tài sản
 SEARCH_FIELDS = [
     "asset_name",
     "asset",
@@ -39,8 +38,6 @@ SEARCH_FIELDS = [
 ]
 
 
-# Gom nhiều cách viết loại tài sản về cùng một mã chung
-# Ví dụ: Laptop, LAPTOP, laptop đều được hiểu là "laptop"
 TYPE_ALIASES = {
     "laptop": ["laptop", "Laptop", "LAPTOP"],
     "pc": ["pc", "PC", "Máy tính bàn", "May tinh ban", "Desktop", "desktop"],
@@ -48,7 +45,6 @@ TYPE_ALIASES = {
     "monitor": ["monitor", "Monitor", "Màn hình", "Man hinh"],
     "phone": ["phone", "Phone", "Điện thoại", "Dien thoai"],
     "projector": ["projector", "Projector", "Máy chiếu", "May chieu"],
-
     "scanner": ["scanner", "Scanner", "Máy quét", "May quet"],
     "network": ["network", "Network", "Thiết bị mạng", "Thiet bi mang"],
     "ups": ["ups", "UPS"],
@@ -66,8 +62,6 @@ TYPE_ALIASES = {
 }
 
 
-# Gom nhiều cách viết trạng thái về cùng một mã chung
-# Ví dụ: "Đang sử dụng", "Dang su dung", "Hoàn thành" đều được hiểu là "using"
 STATUS_ALIASES = {
     "using": ["using", "Đang sử dụng", "Dang su dung", "Hoàn thành"],
     "available": ["available", "Chưa sử dụng", "Chua su dung"],
@@ -77,7 +71,6 @@ STATUS_ALIASES = {
 }
 
 
-# Tên trạng thái dùng để hiển thị ra giao diện
 STATUS_LABELS = {
     "using": "Đang sử dụng",
     "available": "Chưa sử dụng",
@@ -87,7 +80,6 @@ STATUS_LABELS = {
 }
 
 
-# Class CSS tương ứng với từng trạng thái để frontend hiển thị màu badge
 STATUS_BADGE_CLASSES = {
     "using": "status-using",
     "available": "status-free",
@@ -97,7 +89,68 @@ STATUS_BADGE_CLASSES = {
 }
 
 
-# Đổi ngày giờ từ kiểu datetime sang chuỗi để trả JSON không bị lỗi
+FULL_ASSET_ROLES = ["ADMIN", "QUAN_LY"]
+
+
+def user_can_view_all_assets(current_user):
+    if not current_user:
+        return False
+
+    return current_user.get("role") in FULL_ASSET_ROLES
+
+
+def merge_asset_queries(*queries):
+    clean_queries = []
+
+    for query in queries:
+        if query:
+            clean_queries.append(query)
+
+    if not clean_queries:
+        return {}
+
+    if len(clean_queries) == 1:
+        return clean_queries[0]
+
+    return {
+        "$and": clean_queries
+    }
+
+
+def build_asset_visibility_query(current_user=None):
+    if not current_user:
+        return {}
+
+    if user_can_view_all_assets(current_user):
+        return {}
+
+    current_user_id = str(current_user.get("_id") or "")
+    employee_code = current_user.get("employee_code") or ""
+
+    owner_conditions = []
+
+    if current_user_id:
+        owner_conditions.append({
+            "user_id": current_user_id
+        })
+
+    if employee_code:
+        owner_conditions.append({
+            "employee_code": employee_code
+        })
+
+    if not owner_conditions:
+        return {
+            "_id": {
+                "$exists": False
+            }
+        }
+
+    return {
+        "$or": owner_conditions
+    }
+
+
 def serialize_datetime(value):
     if not value:
         return ""
@@ -108,8 +161,6 @@ def serialize_datetime(value):
     return value
 
 
-# Nếu người dùng nhập nhiều kiểu tên loại tài sản khác nhau,
-# hệ thống sẽ đổi về một mã chung
 def normalize_type_code(value):
     value = (value or "").strip()
 
@@ -120,8 +171,6 @@ def normalize_type_code(value):
     return value
 
 
-# Nếu người dùng nhập trạng thái bằng tiếng Việt hoặc tiếng Anh,
-# hệ thống sẽ đổi về một mã trạng thái chung
 def normalize_status_code(value):
     value = (value or "").strip()
 
@@ -132,8 +181,6 @@ def normalize_status_code(value):
     return "pending"
 
 
-# Lấy tất cả cách viết tương đương của một loại tài sản
-# Dùng để khi lọc không bị thiếu dữ liệu do khác cách viết
 def aliases_for_type(asset_type):
     asset_type = (asset_type or "").strip()
 
@@ -148,8 +195,6 @@ def aliases_for_type(asset_type):
     return [asset_type]
 
 
-# Lấy tất cả cách viết tương đương của một trạng thái
-# Dùng để khi lọc không bị thiếu dữ liệu do khác cách viết
 def aliases_for_status(status):
     if not status or status == "Tất cả":
         return None
@@ -159,8 +204,6 @@ def aliases_for_status(status):
     return STATUS_ALIASES.get(code, [status])
 
 
-# Sửa dữ liệu tài sản lấy từ database về dạng dễ dùng cho frontend
-# Ví dụ: _id đổi thành id, asset/asset_name dùng chung, user/receiver dùng chung
 def normalize_asset(item):
     row = dict(item)
 
@@ -203,8 +246,6 @@ def normalize_asset(item):
     return row
 
 
-# Sửa dữ liệu người dùng gửi lên trước khi lưu vào database
-# Mục đích là đảm bảo các field quan trọng luôn có giá trị thống nhất
 def normalize_asset_payload(data):
     data = dict(data)
 
@@ -230,8 +271,6 @@ def normalize_asset_payload(data):
 
     data["asset_code"] = data.get("asset_code") or ""
 
-    # Asset mới ban đầu không có phòng ban / vị trí.
-    # Khi cấp phát cho user thì assign_asset() sẽ tự lấy user.department và user.floor gán vào.
     data["department"] = data.get("department") or ""
     data["location"] = data.get("location") or ""
 
@@ -249,7 +288,6 @@ def normalize_asset_payload(data):
     return data
 
 
-# Kiểm tra dữ liệu tài sản có thiếu thông tin bắt buộc hay không
 def validate_asset_payload(data):
     errors = {}
 
@@ -268,7 +306,6 @@ def validate_asset_payload(data):
     return errors
 
 
-# Tạo điều kiện lọc tài sản theo từ khóa, loại tài sản, phòng ban và trạng thái
 def build_asset_query(
     search="",
     asset_type="Tất cả",
@@ -298,12 +335,18 @@ def build_asset_query(
         })
 
     if department and department != "Tất cả":
-        conditions.append({"department": department})
+        conditions.append({
+            "department": department
+        })
 
     status_values = aliases_for_status(status)
 
     if status_values:
-        conditions.append({"status": {"$in": status_values}})
+        conditions.append({
+            "status": {
+                "$in": status_values
+            }
+        })
 
     if not conditions:
         return {}
@@ -311,21 +354,23 @@ def build_asset_query(
     if len(conditions) == 1:
         return conditions[0]
 
-    return {"$and": conditions}
+    return {
+        "$and": conditions
+    }
 
 
-# Tạo điều kiện tìm tài sản
-# Nếu asset_id là ObjectId hợp lệ thì tìm theo _id, nếu không thì tìm theo asset_code
 def build_asset_id_query(asset_id):
     if ObjectId.is_valid(asset_id):
-        return {"_id": ObjectId(asset_id)}
+        return {
+            "_id": ObjectId(asset_id)
+        }
 
-    return {"asset_code": asset_id}
+    return {
+        "asset_code": asset_id
+    }
 
 
-# Đếm số lượng tài sản theo loại, trạng thái, phòng ban và vị trí
-# Dữ liệu này thường dùng cho bộ lọc hoặc thống kê nhanh trên giao diện
-def get_asset_filter_counts():
+def get_asset_filter_counts(current_user=None):
     type_counts = {
         "all": 0,
     }
@@ -339,10 +384,26 @@ def get_asset_filter_counts():
         "pending": 0,
     }
 
-    department_counts = {"all": 0}
-    location_counts = {"all": 0}
+    department_counts = {
+        "all": 0
+    }
 
-    cursor = find_assets_for_counts()
+    location_counts = {
+        "all": 0
+    }
+
+    visibility_query = build_asset_visibility_query(current_user)
+
+    if visibility_query:
+        cursor = find_assets(
+            query=visibility_query,
+            skip=0,
+            limit=100000,
+            sort_field="_id",
+            sort_order=-1,
+        )
+    else:
+        cursor = find_assets_for_counts()
 
     for item in cursor:
         type_code = normalize_type_code(item.get("type") or item.get("category"))
@@ -359,8 +420,6 @@ def get_asset_filter_counts():
         department_counts["all"] += 1
         location_counts["all"] += 1
 
-        # Không gom type lạ vào "other" nữa.
-        # scanner, network, ups, camera, tablet, server... sẽ hiện riêng.
         type_counts[type_code] = type_counts.get(type_code, 0) + 1
         status_counts[status_code] = status_counts.get(status_code, 0) + 1
 
@@ -380,7 +439,7 @@ def get_asset_filter_counts():
         "location": location_counts,
     }
 
-# Lấy danh sách tài sản có phân trang, tìm kiếm, lọc và thống kê bộ lọc
+
 def list_assets(
     page=1,
     per_page=10,
@@ -388,15 +447,23 @@ def list_assets(
     asset_type="Tất cả",
     department="Tất cả",
     status="Tất cả",
+    current_user=None,
 ):
     page = max(1, int(page))
     per_page = max(1, min(int(per_page), 100))
 
-    query = build_asset_query(
+    filter_query = build_asset_query(
         search=search,
         asset_type=asset_type,
         department=department,
         status=status,
+    )
+
+    visibility_query = build_asset_visibility_query(current_user)
+
+    query = merge_asset_queries(
+        filter_query,
+        visibility_query,
     )
 
     total_items = count_assets(query)
@@ -425,13 +492,25 @@ def list_assets(
             "total_items": total_items,
             "total_pages": total_pages,
         },
-        "filter_counts": get_asset_filter_counts(),
+        "filter_counts": get_asset_filter_counts(current_user=current_user),
+        "scope": {
+            "view_all": user_can_view_all_assets(current_user),
+            "role": current_user.get("role") if current_user else None,
+            "user_id": str(current_user.get("_id")) if current_user else None,
+            "employee_code": current_user.get("employee_code") if current_user else None,
+        }
     }
 
 
-# Tìm một tài sản theo id hoặc mã tài sản
-def find_asset(asset_id):
-    query = build_asset_id_query(asset_id)
+def find_asset(asset_id, current_user=None):
+    asset_id_query = build_asset_id_query(asset_id)
+    visibility_query = build_asset_visibility_query(current_user)
+
+    query = merge_asset_queries(
+        asset_id_query,
+        visibility_query,
+    )
+
     item = find_asset_by_query(query)
 
     if not item:
@@ -440,7 +519,6 @@ def find_asset(asset_id):
     return normalize_asset(item)
 
 
-# Xóa một tài sản theo id hoặc mã tài sản
 def delete_asset(asset_id):
     query = build_asset_id_query(asset_id)
     result = delete_asset_by_query(query)
@@ -451,7 +529,6 @@ def delete_asset(asset_id):
     }
 
 
-# Thêm một tài sản mới vào database
 def add_asset(data):
     data = normalize_asset_payload(data)
     errors = validate_asset_payload(data)
@@ -472,7 +549,9 @@ def add_asset(data):
         }
 
     result = insert_asset(data)
-    created_item = find_asset_by_query({"_id": result.inserted_id})
+    created_item = find_asset_by_query({
+        "_id": result.inserted_id
+    })
 
     return {
         "created": True,
@@ -480,8 +559,177 @@ def add_asset(data):
     }
 
 
-# Thêm nhiều tài sản cùng lúc
-# Item lỗi sẽ bị bỏ qua và ghi vào skipped_items
+def build_update_asset_data(data):
+    data = data or {}
+    update_data = {}
+
+    if "asset_code" in data:
+        asset_code = (data.get("asset_code") or "").strip()
+
+        if not asset_code:
+            return None, {
+                "asset_code": "Mã tài sản là bắt buộc"
+            }
+
+        update_data["asset_code"] = asset_code
+
+    if "asset_name" in data or "asset" in data:
+        asset_name = (
+            data.get("asset_name")
+            or data.get("asset")
+            or ""
+        ).strip()
+
+        if not asset_name:
+            return None, {
+                "asset_name": "Tên tài sản là bắt buộc"
+            }
+
+        update_data["asset_name"] = asset_name
+        update_data["asset"] = asset_name
+
+    if "type" in data or "category" in data:
+        raw_type = (
+            data.get("type")
+            or data.get("category")
+            or ""
+        ).strip()
+
+        if not raw_type:
+            return None, {
+                "type": "Loại tài sản là bắt buộc"
+            }
+
+        type_code = normalize_type_code(raw_type)
+        update_data["type"] = type_code
+        update_data["category"] = type_code
+
+    if "status" in data:
+        raw_status = (data.get("status") or "").strip()
+
+        if not raw_status:
+            return None, {
+                "status": "Trạng thái là bắt buộc"
+            }
+
+        update_data["status"] = normalize_status_code(raw_status)
+
+    optional_text_fields = [
+        "warranty",
+        "spec",
+        "notes",
+        "department",
+        "location",
+        "user_id",
+        "employee_code",
+        "user",
+        "receiver",
+    ]
+
+    for field in optional_text_fields:
+        if field in data:
+            update_data[field] = data.get(field) or ""
+
+    if "spec" in update_data and "notes" not in update_data:
+        update_data["notes"] = update_data["spec"]
+
+    if "notes" in update_data and "spec" not in update_data:
+        update_data["spec"] = update_data["notes"]
+
+    if update_data:
+        update_data["updated_at"] = datetime.utcnow()
+
+    return update_data, None
+
+
+def check_duplicate_asset_code_for_update(asset_id, asset, new_asset_code):
+    if not new_asset_code:
+        return False
+
+    old_asset_code = asset.get("asset_code")
+
+    if old_asset_code == new_asset_code:
+        return False
+
+    current_object_id = asset.get("_id")
+
+    duplicate_query = {
+        "asset_code": new_asset_code
+    }
+
+    if current_object_id:
+        duplicate_query["_id"] = {
+            "$ne": current_object_id
+        }
+
+    existed_asset = find_asset_by_query(duplicate_query)
+
+    return existed_asset is not None
+
+
+def update_asset(asset_id, data, current_user=None):
+    if data is None:
+        data = {}
+
+    asset_id_query = build_asset_id_query(asset_id)
+    visibility_query = build_asset_visibility_query(current_user)
+
+    find_query = merge_asset_queries(
+        asset_id_query,
+        visibility_query,
+    )
+
+    asset = find_asset_by_query(find_query)
+
+    if not asset:
+        return {
+            "success": False,
+            "message": "Không tìm thấy tài sản",
+            "status_code": 404,
+        }
+
+    update_data, errors = build_update_asset_data(data)
+
+    if errors:
+        return {
+            "success": False,
+            "message": "Dữ liệu không hợp lệ",
+            "errors": errors,
+            "status_code": 400,
+        }
+
+    if not update_data:
+        return {
+            "success": False,
+            "message": "Không có dữ liệu để cập nhật",
+            "status_code": 400,
+        }
+
+    new_asset_code = update_data.get("asset_code")
+
+    if check_duplicate_asset_code_for_update(asset_id, asset, new_asset_code):
+        return {
+            "success": False,
+            "message": "Mã tài sản đã tồn tại",
+            "status_code": 409,
+        }
+
+    update_query = {
+        "_id": asset.get("_id")
+    }
+
+    update_asset_by_query(update_query, update_data)
+
+    updated_asset = find_asset_by_query(update_query)
+
+    return {
+        "success": True,
+        "message": "Cập nhật tài sản thành công",
+        "item": normalize_asset(updated_asset),
+        "status_code": 200,
+    }
+
+
 def add_many_assets(items):
     if not isinstance(items, list):
         return {
@@ -566,9 +814,19 @@ def add_many_assets(items):
     }
 
 
-# Lấy danh sách loại tài sản hiện có kèm số lượng của từng loại
-def get_asset_type_options():
-    cursor = find_assets_for_counts()
+def get_asset_type_options(current_user=None):
+    visibility_query = build_asset_visibility_query(current_user)
+
+    if visibility_query:
+        cursor = find_assets(
+            query=visibility_query,
+            skip=0,
+            limit=100000,
+            sort_field="_id",
+            sort_order=-1,
+        )
+    else:
+        cursor = find_assets_for_counts()
 
     types = {}
 
@@ -592,8 +850,6 @@ def get_asset_type_options():
     }
 
 
-# Tìm người dùng để cấp phát tài sản
-# Có thể tìm bằng user_id, employee_code hoặc email
 def find_user_for_assign(data):
     data = data or {}
 
@@ -602,19 +858,23 @@ def find_user_for_assign(data):
     email = data.get("email")
 
     if user_id and ObjectId.is_valid(user_id):
-        return users_collection.find_one({"_id": ObjectId(user_id)})
+        return users_collection.find_one({
+            "_id": ObjectId(user_id)
+        })
 
     if employee_code:
-        return users_collection.find_one({"employee_code": employee_code})
+        return users_collection.find_one({
+            "employee_code": employee_code
+        })
 
     if email:
-        return users_collection.find_one({"email": email})
+        return users_collection.find_one({
+            "email": email
+        })
 
     return None
 
 
-# Cấp phát tài sản cho một người dùng
-# Khi cấp phát sẽ lấy thông tin người dùng để gán vào tài sản
 def assign_asset(asset_id, data):
     asset_query = build_asset_id_query(asset_id)
     asset = find_asset_by_query(asset_query)
@@ -669,8 +929,6 @@ def assign_asset(asset_id, data):
     }
 
 
-# Thu hồi tài sản khỏi người dùng
-# Sau khi thu hồi, tài sản trở về trạng thái chưa sử dụng
 def unassign_asset(asset_id):
     asset_query = build_asset_id_query(asset_id)
     asset = find_asset_by_query(asset_query)
@@ -708,7 +966,6 @@ def unassign_asset(asset_id):
     }
 
 
-# Tính phần trăm, nếu tổng bằng 0 thì trả về 0 để tránh lỗi chia cho 0
 def _percent(value, total):
     if not total:
         return 0
@@ -716,9 +973,7 @@ def _percent(value, total):
     return round((value / total) * 100)
 
 
-# Lấy dữ liệu tổng quan tài sản cho dashboard
-# Bao gồm số lượng theo trạng thái và danh sách tài sản mới nhất
-def get_dashboard_assets_overview(limit=4):
+def get_dashboard_assets_overview(limit=4, current_user=None):
     try:
         limit = int(limit)
     except (TypeError, ValueError):
@@ -726,7 +981,9 @@ def get_dashboard_assets_overview(limit=4):
 
     limit = max(1, min(limit, 20))
 
-    counts = get_asset_filter_counts()
+    visibility_query = build_asset_visibility_query(current_user)
+
+    counts = get_asset_filter_counts(current_user=current_user)
     status_counts = counts.get("status", {})
 
     total = status_counts.get("all", 0)
@@ -738,7 +995,7 @@ def get_dashboard_assets_overview(limit=4):
     problem = maintenance + broken
 
     raw_items = find_assets(
-        query={},
+        query=visibility_query,
         skip=0,
         limit=limit,
         sort_field="_id",

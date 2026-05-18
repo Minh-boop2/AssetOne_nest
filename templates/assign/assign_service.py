@@ -1,5 +1,6 @@
 import math
 import re
+from datetime import datetime
 from bson import ObjectId
 
 from .assign_model import (
@@ -12,13 +13,14 @@ from .assign_model import (
 )
 
 
-# Những cột sẽ được dùng khi người dùng nhập từ khóa tìm kiếm cấp phát
 SEARCH_FIELDS = [
     "asset_name",
     "asset",
     "asset_code",
     "user",
     "receiver",
+    "user_id",
+    "employee_code",
     "department",
     "location",
     "status",
@@ -31,13 +33,92 @@ SEARCH_FIELDS = [
 
 
 # Những trạng thái trong bảng assets được hiểu là tài sản đang được sử dụng
-USING_STATUS_VALUES = ["using", "Đang sử dụng"]
+USING_STATUS_VALUES = [
+    "using",
+    "Đang sử dụng",
+]
 
 # Những trạng thái trong bảng assets được hiểu là tài sản chưa được sử dụng
-UNUSED_STATUS_VALUES = ["available", "Chưa sử dụng"]
+UNUSED_STATUS_VALUES = [
+    "available",
+    "Chưa sử dụng",
+]
+
+FULL_ASSIGN_ROLES = [
+    "ADMIN",
+    "QUAN_LY",
+]
 
 
-# Đổi trạng thái của asset sang trạng thái hiển thị bên màn cấp phát
+def user_can_view_all_assigns(current_user):
+    if not current_user:
+        return False
+
+    return current_user.get("role") in FULL_ASSIGN_ROLES
+
+
+def merge_assign_queries(*queries):
+    clean_queries = []
+
+    for query in queries:
+        if query:
+            clean_queries.append(query)
+
+    if not clean_queries:
+        return {}
+
+    if len(clean_queries) == 1:
+        return clean_queries[0]
+
+    return {
+        "$and": clean_queries
+    }
+
+
+def build_assign_visibility_query(current_user=None):
+    """
+    Điều kiện giới hạn dữ liệu cấp phát theo role.
+
+    ADMIN / QUAN_LY:
+        thấy toàn bộ
+
+    NHAN_VIEN:
+        chỉ thấy tài sản/cấp phát có user_id hoặc employee_code trùng với user hiện tại
+    """
+
+    if not current_user:
+        return {}
+
+    if user_can_view_all_assigns(current_user):
+        return {}
+
+    current_user_id = str(current_user.get("_id") or "")
+    employee_code = current_user.get("employee_code") or ""
+
+    owner_conditions = []
+
+    if current_user_id:
+        owner_conditions.append({
+            "user_id": current_user_id
+        })
+
+    if employee_code:
+        owner_conditions.append({
+            "employee_code": employee_code
+        })
+
+    if not owner_conditions:
+        return {
+            "_id": {
+                "$exists": False
+            }
+        }
+
+    return {
+        "$or": owner_conditions
+    }
+
+
 def map_asset_status_to_assign_status(status):
     status = (status or "").strip()
 
@@ -50,8 +131,6 @@ def map_asset_status_to_assign_status(status):
     return None
 
 
-# Đổi trạng thái người dùng chọn ở màn cấp phát thành danh sách trạng thái trong assets
-# Dùng để lọc dữ liệu đúng trong database
 def map_assign_status_to_asset_status_values(status):
     status = (status or "").strip()
 
@@ -67,7 +146,6 @@ def map_assign_status_to_asset_status_values(status):
     return []
 
 
-# Lấy dữ liệu từ assets rồi đổi sang dạng dữ liệu mà màn cấp phát cần dùng
 def normalize_assign_from_asset(item):
     row = dict(item)
 
@@ -92,14 +170,17 @@ def normalize_assign_from_asset(item):
         "status": assign_status,
         "asset_status": row.get("status") or "",
 
+        "user_id": row.get("user_id") or "",
+        "employee_code": row.get("employee_code") or "",
+
         "receiver": user,
         "user": user,
 
         "department": row.get("department") or "",
         "location": row.get("location") or "",
 
-        "date": row.get("date") or row.get("assigned_date") or "",
-        "return_date": row.get("return_date") or "",
+        "date": row.get("date") or row.get("assigned_date") or row.get("assigned_at") or "",
+        "return_date": row.get("return_date") or row.get("returned_at") or "",
 
         "warranty": row.get("warranty") or "",
         "spec": row.get("spec") or row.get("notes") or "",
@@ -107,22 +188,26 @@ def normalize_assign_from_asset(item):
     }
 
 
-# Tạo điều kiện tìm một bản ghi cấp phát
-# Có thể tìm bằng _id, asset_code hoặc id
 def build_id_query(asset_id):
     queries = [
-        {"asset_code": asset_id},
-        {"id": asset_id},
+        {
+            "asset_code": asset_id
+        },
+        {
+            "id": asset_id
+        },
     ]
 
     if ObjectId.is_valid(asset_id):
-        queries.insert(0, {"_id": ObjectId(asset_id)})
+        queries.insert(0, {
+            "_id": ObjectId(asset_id)
+        })
 
-    return {"$or": queries}
+    return {
+        "$or": queries
+    }
 
 
-# Tạo điều kiện lọc danh sách cấp phát
-# Có thể lọc theo tìm kiếm, loại tài sản, phòng ban, trạng thái và vị trí
 def build_assign_query(
     search="",
     asset_type="Tất cả",
@@ -132,11 +217,14 @@ def build_assign_query(
 ):
     conditions = []
 
-    # Assign chỉ lấy 2 trạng thái này từ assets.
     allowed_status_values = map_assign_status_to_asset_status_values(status)
 
     if not allowed_status_values:
-        return {"_id": {"$exists": False}}
+        return {
+            "_id": {
+                "$exists": False
+            }
+        }
 
     conditions.append({
         "status": {
@@ -149,7 +237,12 @@ def build_assign_query(
 
         conditions.append({
             "$or": [
-                {field: {"$regex": safe_search, "$options": "i"}}
+                {
+                    field: {
+                        "$regex": safe_search,
+                        "$options": "i"
+                    }
+                }
                 for field in SEARCH_FIELDS
             ]
         })
@@ -157,46 +250,84 @@ def build_assign_query(
     if asset_type and asset_type != "Tất cả":
         conditions.append({
             "$or": [
-                {"type": asset_type},
-                {"category": asset_type},
+                {
+                    "type": asset_type
+                },
+                {
+                    "category": asset_type
+                },
             ]
         })
 
     if department and department != "Tất cả":
-        conditions.append({"department": department})
+        conditions.append({
+            "department": department
+        })
 
     if location and location != "Tất cả":
-        conditions.append({"location": location})
+        conditions.append({
+            "location": location
+        })
 
     if len(conditions) == 1:
         return conditions[0]
 
-    return {"$and": conditions}
-
-
-# Đếm số lượng bản ghi cấp phát theo loại, phòng ban, vị trí và trạng thái
-# Dữ liệu này dùng cho bộ lọc và thống kê nhanh trên giao diện
-def get_assign_filter_counts():
-    base_query = {
-        "status": {
-            "$in": USING_STATUS_VALUES + UNUSED_STATUS_VALUES
-        }
+    return {
+        "$and": conditions
     }
+
+
+def build_status_count_query(status_values, visibility_query=None):
+    return merge_assign_queries(
+        {
+            "status": {
+                "$in": status_values
+            }
+        },
+        visibility_query,
+    )
+
+
+def get_assign_filter_counts(current_user=None):
+    visibility_query = build_assign_visibility_query(current_user)
+
+    base_query = merge_assign_queries(
+        {
+            "status": {
+                "$in": USING_STATUS_VALUES + UNUSED_STATUS_VALUES
+            }
+        },
+        visibility_query,
+    )
 
     total = count_assign_assets(base_query)
 
-    type_counts = {"all": total}
-    department_counts = {"all": total}
-    location_counts = {"all": total}
+    type_counts = {
+        "all": total
+    }
+
+    department_counts = {
+        "all": total
+    }
+
+    location_counts = {
+        "all": total
+    }
 
     status_counts = {
         "all": total,
-        "Đang sử dụng": count_assign_assets({
-            "status": {"$in": USING_STATUS_VALUES}
-        }),
-        "Chưa dùng": count_assign_assets({
-            "status": {"$in": UNUSED_STATUS_VALUES}
-        }),
+        "Đang sử dụng": count_assign_assets(
+            build_status_count_query(
+                USING_STATUS_VALUES,
+                visibility_query,
+            )
+        ),
+        "Chưa dùng": count_assign_assets(
+            build_status_count_query(
+                UNUSED_STATUS_VALUES,
+                visibility_query,
+            )
+        ),
     }
 
     for item in find_assign_assets_for_counts(base_query):
@@ -221,7 +352,6 @@ def get_assign_filter_counts():
     }
 
 
-# Lấy danh sách cấp phát có phân trang, tìm kiếm, lọc và thống kê bộ lọc
 def list_assigns(
     page=1,
     per_page=10,
@@ -230,16 +360,24 @@ def list_assigns(
     department="Tất cả",
     status="Tất cả",
     location="Tất cả",
+    current_user=None,
 ):
     page = max(1, int(page))
     per_page = max(1, int(per_page))
 
-    query = build_assign_query(
+    filter_query = build_assign_query(
         search=search,
         asset_type=asset_type,
         department=department,
         status=status,
         location=location,
+    )
+
+    visibility_query = build_assign_visibility_query(current_user)
+
+    query = merge_assign_queries(
+        filter_query,
+        visibility_query,
     )
 
     total_items = count_assign_assets(query)
@@ -263,7 +401,6 @@ def list_assigns(
     for item in raw_items:
         row = normalize_assign_from_asset(item)
 
-        # Chặn chắc chắn: không cho trạng thái khác lọt qua.
         if row["status"] in ["Đang sử dụng", "Chưa dùng"]:
             items.append(row)
 
@@ -275,13 +412,26 @@ def list_assigns(
             "total_items": total_items,
             "total_pages": total_pages,
         },
-        "filter_counts": get_assign_filter_counts(),
+        "filter_counts": get_assign_filter_counts(current_user=current_user),
+        "scope": {
+            "view_all": user_can_view_all_assigns(current_user),
+            "role": current_user.get("role") if current_user else None,
+            "user_id": str(current_user.get("_id")) if current_user else None,
+            "employee_code": current_user.get("employee_code") if current_user else None,
+        }
     }
 
 
-# Tìm một bản ghi cấp phát theo id, mã tài sản hoặc mongo id
-def find_assign(assign_id):
-    item = find_assign_asset_by_query(build_id_query(assign_id))
+def find_assign(assign_id, current_user=None):
+    id_query = build_id_query(assign_id)
+    visibility_query = build_assign_visibility_query(current_user)
+
+    query = merge_assign_queries(
+        id_query,
+        visibility_query,
+    )
+
+    item = find_assign_asset_by_query(query)
 
     if not item:
         return None
@@ -294,11 +444,16 @@ def find_assign(assign_id):
     return row
 
 
-# Xóa một bản ghi cấp phát
-def delete_assign(assign_id):
-    # Cẩn thận: assign đang là view từ assets.
-    # Nếu gọi delete thì sẽ xóa asset.
-    result = delete_assign_asset_by_query(build_id_query(assign_id))
+def delete_assign(assign_id, current_user=None):
+    id_query = build_id_query(assign_id)
+    visibility_query = build_assign_visibility_query(current_user)
+
+    query = merge_assign_queries(
+        id_query,
+        visibility_query,
+    )
+
+    result = delete_assign_asset_by_query(query)
 
     return {
         "deleted": result.deleted_count > 0,
@@ -306,23 +461,58 @@ def delete_assign(assign_id):
     }
 
 
-# Cập nhật trạng thái cấp phát theo id
-# Trạng thái cấp phát sẽ được đổi ngược lại thành trạng thái trong assets
-def update_assign_status_by_id(assign_id, assign_status):
+def build_update_data_for_assign_status(assign_status):
+    assign_status = (assign_status or "").strip()
+    now = datetime.utcnow()
+
     if assign_status == "Đang sử dụng":
-        asset_status = "Đang sử dụng"
-    elif assign_status in ["Chưa dùng", "Chưa sử dụng"]:
-        asset_status = "Chưa sử dụng"
-    else:
+        return {
+            "status": "using",
+            "updated_at": now,
+        }
+
+    if assign_status in ["Chưa dùng", "Chưa sử dụng"]:
+        return {
+            "status": "available",
+
+            # Khi chuyển về chưa dùng thì coi như thu hồi / hủy cấp phát.
+            # Xóa thông tin người đang giữ để nhân viên không còn thấy asset này là của mình.
+            "user_id": "",
+            "employee_code": "",
+            "user": "",
+            "receiver": "",
+            "department": "",
+            "location": "",
+            "returned_at": now,
+            "updated_at": now,
+        }
+
+    return None
+
+
+def update_assign_status_by_id(assign_id, assign_status, current_user=None):
+    update_data = build_update_data_for_assign_status(assign_status)
+
+    if not update_data:
         return {
             "updated": False,
             "modified_count": 0,
             "item": None,
         }
 
+    id_query = build_id_query(assign_id)
+    visibility_query = build_assign_visibility_query(current_user)
+
+    query = merge_assign_queries(
+        id_query,
+        visibility_query,
+    )
+
     result = update_assign_asset_by_query(
-        build_id_query(assign_id),
-        {"$set": {"status": asset_status}}
+        query,
+        {
+            "$set": update_data
+        }
     )
 
     if result.matched_count <= 0:
@@ -335,20 +525,32 @@ def update_assign_status_by_id(assign_id, assign_status):
     return {
         "updated": True,
         "modified_count": result.modified_count,
-        "item": find_assign(assign_id),
+        "item": find_assign(
+            assign_id,
+            current_user=current_user,
+        ),
     }
 
 
-# Duyệt cấp phát, chuyển trạng thái sang đang sử dụng
-def approve_assign(assign_id):
-    return update_assign_status_by_id(assign_id, "Đang sử dụng")
+def approve_assign(assign_id, current_user=None):
+    return update_assign_status_by_id(
+        assign_id,
+        "Đang sử dụng",
+        current_user=current_user,
+    )
 
 
-# Từ chối hoặc hủy cấp phát, chuyển trạng thái sang chưa dùng
-def reject_assign(assign_id):
-    return update_assign_status_by_id(assign_id, "Chưa dùng")
+def reject_assign(assign_id, current_user=None):
+    return update_assign_status_by_id(
+        assign_id,
+        "Chưa dùng",
+        current_user=current_user,
+    )
 
 
-# Cập nhật trạng thái cấp phát theo trạng thái được gửi lên
-def update_assign_status(assign_id, status):
-    return update_assign_status_by_id(assign_id, status)
+def update_assign_status(assign_id, status, current_user=None):
+    return update_assign_status_by_id(
+        assign_id,
+        status,
+        current_user=current_user,
+    )
