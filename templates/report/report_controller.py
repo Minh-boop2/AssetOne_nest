@@ -16,6 +16,13 @@ from templates.report.report_service import (
     get_report_overview,
 )
 
+from templates.notification.notification_service import (
+    notify_staff_report_created,
+    notify_report_approved,
+    notify_report_cancelled,
+    notify_staff_asset_assigned,
+)
+
 from templates.permission.permission_service import (
     permission_required,
     get_current_user_from_request,
@@ -49,6 +56,13 @@ def _get_current_user_id(current_user):
         return ""
 
     return str(current_user.get("_id") or current_user.get("id") or "")
+
+
+def _get_current_user_role(current_user):
+    if not current_user:
+        return ""
+
+    return current_user.get("role") or ""
 
 
 def _get_report_title(report):
@@ -252,6 +266,89 @@ def _build_delete_report_file_action(report, file_id):
     return f"Xóa file trong báo cáo {report_title}"
 
 
+def _notify_after_create_report(current_user, report):
+    try:
+        if _get_current_user_role(current_user) != "NHAN_VIEN":
+            return
+
+        notify_staff_report_created(
+            staff_user_id=report.get("reporter_user_id") or _get_current_user_id(current_user),
+            staff_name=report.get("reporter"),
+            report_id=_get_report_id(report),
+            report_title=_get_report_title(report),
+            report_type=report.get("report_type"),
+            asset_name=report.get("asset_name"),
+        )
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def _notify_after_approve_report(current_user, approved_report, response, data, report_id):
+    try:
+        reporter_user_id = approved_report.get("reporter_user_id")
+
+        if not reporter_user_id:
+            return
+
+        current_user_id = _get_current_user_id(current_user)
+        report_title = _get_report_title(approved_report)
+
+        notify_report_approved(
+            recipient_user_id=reporter_user_id,
+            report_id=_get_report_id(approved_report) or report_id,
+            report_title=report_title,
+            approved_by=current_user_id,
+            approval_note=data.get("approval_note") or data.get("note") or "",
+        )
+
+        asset_action_result = response.get("asset_action_result") or {}
+
+        if asset_action_result.get("action") == "assign_to_reporter":
+            asset = asset_action_result.get("asset") or {}
+
+            notify_staff_asset_assigned(
+                recipient_user_id=reporter_user_id,
+                asset_id=(
+                    asset.get("id")
+                    or asset.get("_id")
+                    or approved_report.get("asset_id")
+                    or approved_report.get("asset_code")
+                ),
+                asset_name=(
+                    asset.get("asset_name")
+                    or asset.get("asset")
+                    or approved_report.get("asset_name")
+                ),
+                assigned_by=current_user_id,
+            )
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def _notify_after_cancel_report(current_user, cancelled_report, data, report_id):
+    try:
+        reporter_user_id = cancelled_report.get("reporter_user_id")
+
+        if not reporter_user_id:
+            return
+
+        notify_report_cancelled(
+            recipient_user_id=reporter_user_id,
+            report_id=_get_report_id(cancelled_report) or report_id,
+            report_title=_get_report_title(cancelled_report),
+            cancelled_by=_get_current_user_id(current_user),
+            reason=data.get("cancel_reason") or data.get("reason") or "",
+        )
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
 def register_reports_api_routes(app):
 
     @app.route("/api/reports/options", methods=["GET"])
@@ -280,6 +377,7 @@ def register_reports_api_routes(app):
     def api_get_reports():
         current_user = get_current_user_from_request()
         filters = request.args.to_dict()
+        filters["limit"] = "10"
 
         response, status_code = get_reports(
             filters=filters,
@@ -301,7 +399,6 @@ def register_reports_api_routes(app):
         return jsonify(response), status_code
 
     @app.route("/api/reports", methods=["POST"])
-    @permission_required("reports", "create")
     def api_create_report():
         current_user = get_current_user_from_request()
         data = _get_request_data()
@@ -328,6 +425,11 @@ def register_reports_api_routes(app):
                     "report": _build_report_metadata(report),
                     "uploaded_file_count": len(uploaded_files),
                 },
+            )
+
+            _notify_after_create_report(
+                current_user=current_user,
+                report=report,
             )
 
         return jsonify(response), status_code
@@ -408,6 +510,14 @@ def register_reports_api_routes(app):
                 },
             )
 
+            _notify_after_approve_report(
+                current_user=current_user,
+                approved_report=approved_report,
+                response=response,
+                data=data,
+                report_id=report_id,
+            )
+
         return jsonify(response), status_code
 
     @app.route("/api/reports/<report_id>/cancel", methods=["POST", "PATCH"])
@@ -445,14 +555,23 @@ def register_reports_api_routes(app):
                 },
             )
 
+            _notify_after_cancel_report(
+                current_user=current_user,
+                cancelled_report=cancelled_report,
+                data=data,
+                report_id=report_id,
+            )
+
         return jsonify(response), status_code
 
     @app.route("/api/reports/<report_id>", methods=["DELETE"])
-    @permission_required("reports", "delete")
     def api_delete_report(report_id):
         current_user = get_current_user_from_request()
 
-        response, status_code = delete_report(report_id)
+        response, status_code = delete_report(
+            report_id=report_id,
+            current_user=current_user,
+        )
 
         if status_code == 200 and response.get("success"):
             deleted_report = _get_response_report_data(response)
@@ -514,5 +633,5 @@ def register_reports_api_routes(app):
         return send_from_directory(
             UPLOAD_FOLDER,
             filename,
-            as_attachment=as_attachment
+            as_attachment=as_attachment,
         )

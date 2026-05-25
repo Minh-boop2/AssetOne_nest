@@ -1,7 +1,8 @@
 import math
 import re
 from bson import ObjectId
-
+import secrets
+import string
 from mongo import users_collection
 
 from templates.report.report_model import (
@@ -20,7 +21,6 @@ from templates.report.report_model import (
     insert_report,
     update_report_by_query,
     delete_report_by_query,
-    generate_report_code,
     save_uploaded_file,
     delete_uploaded_file,
 )
@@ -55,6 +55,45 @@ USING_STATUS_VALUES = [
     "Đang sử dụng",
     "Dang su dung",
 ]
+
+# Những trạng thái báo cáo vẫn khóa tài sản khỏi dropdown chọn tài sản.
+# Khi báo cáo bị hủy, tài sản được phép hiện lại.
+REPORT_ASSET_UNLOCKED_STATUSES = [
+    "Đã hủy",
+]
+
+ALLOWED_CREATE_REPORT_ROLES = [
+    "ADMIN",
+    "QUAN_LY",
+    "NHAN_VIEN",
+]
+
+ALLOWED_DELETE_REPORT_ROLES = [
+    "ADMIN",
+    "QUAN_LY",
+    "NHAN_VIEN",
+]
+
+REPORT_CODE_PREFIX = "REPORT"
+REPORT_CODE_LENGTH = 8
+REPORT_CODE_MAX_ATTEMPTS = 50
+
+
+def generate_unique_report_code():
+    alphabet = string.ascii_uppercase + string.digits
+
+    for _ in range(REPORT_CODE_MAX_ATTEMPTS):
+        random_part = "".join(
+            secrets.choice(alphabet)
+            for _ in range(REPORT_CODE_LENGTH)
+        )
+
+        report_code = f"{REPORT_CODE_PREFIX}-{random_part}"
+
+        if not find_report_by_code(report_code):
+            return report_code
+
+    raise ValueError("Không thể tạo mã báo cáo không trùng. Vui lòng thử lại.")
 
 
 def _value(data, *keys, default=""):
@@ -104,6 +143,10 @@ def _current_user_role_label(current_user):
         return "Staff"
 
     return role
+
+
+def _current_user_role(current_user):
+    return (current_user or {}).get("role") or ""
 
 
 def _current_user_department(current_user):
@@ -200,6 +243,153 @@ def _build_asset_owner_conditions(current_user=None):
         })
 
     return conditions
+
+
+def _build_report_owner_conditions(current_user=None):
+    if not current_user:
+        return []
+
+    user_id = _current_user_id(current_user)
+    employee_code = current_user.get("employee_code") or ""
+    email = current_user.get("email") or ""
+
+    conditions = []
+
+    if user_id:
+        conditions.append({
+            "reporter_user_id": user_id
+        })
+
+    if employee_code:
+        conditions.append({
+            "reporter_employee_code": employee_code
+        })
+
+    if email:
+        conditions.append({
+            "reporter_email": email
+        })
+
+    return conditions
+
+
+def _string_key(value):
+    value = str(value or "").strip()
+
+    if not value:
+        return ""
+
+    return value
+
+
+def _get_asset_lock_keys(asset):
+    asset = asset or {}
+
+    keys = set()
+
+    for key in ["id", "_id", "asset_id", "code", "asset_code"]:
+        value = _string_key(asset.get(key))
+
+        if value:
+            keys.add(value)
+
+    return keys
+
+
+def _get_current_user_reported_asset_keys(current_user=None):
+    owner_conditions = _build_report_owner_conditions(current_user)
+
+    if not owner_conditions:
+        return set()
+
+    reports = find_reports(
+        query={
+            "$and": [
+                {
+                    "$or": owner_conditions
+                },
+                {
+                    "status": {
+                        "$nin": REPORT_ASSET_UNLOCKED_STATUSES
+                    }
+                }
+            ]
+        },
+        skip=0,
+        limit=100000,
+        sort_field="_id",
+        sort_order=-1,
+    )
+
+    locked_keys = set()
+
+    for report in reports:
+        for key in ["asset_id", "asset_code", "asset"]:
+            value = _string_key(report.get(key))
+
+            if value:
+                locked_keys.add(value)
+
+    return locked_keys
+
+
+def _asset_has_locked_report(asset, current_user=None):
+    asset_keys = _get_asset_lock_keys(asset)
+
+    if not asset_keys:
+        return False
+
+    locked_keys = _get_current_user_reported_asset_keys(current_user)
+
+    return bool(asset_keys.intersection(locked_keys))
+
+
+def _is_asset_usable_for_report(asset):
+    asset = asset or {}
+    status = str(asset.get("status") or "").strip().lower()
+
+    # normalize_asset đang chuẩn hóa "Đang sử dụng" về "using".
+    # Check thêm tiếng Việt để chống trường hợp dữ liệu cũ chưa được chuẩn hóa.
+    return status in [
+        "using",
+        "đang sử dụng",
+        "dang su dung",
+    ]
+
+
+def _is_own_report(report, current_user=None):
+    if not report or not current_user:
+        return False
+
+    user_id = _current_user_id(current_user)
+    employee_code = current_user.get("employee_code") or ""
+    email = current_user.get("email") or ""
+
+    if user_id and str(report.get("reporter_user_id") or "") == user_id:
+        return True
+
+    if employee_code and str(report.get("reporter_employee_code") or "") == str(employee_code):
+        return True
+
+    if email and str(report.get("reporter_email") or "") == str(email):
+        return True
+
+    return False
+
+
+def _can_delete_report(current_user=None, report=None):
+    role = _current_user_role(current_user)
+
+    if role not in ALLOWED_DELETE_REPORT_ROLES:
+        return False
+
+    if role in FULL_REPORT_ROLES:
+        return True
+
+    if role == "NHAN_VIEN":
+        return _is_own_report(report, current_user)
+
+    return False
 
 
 def _build_asset_key_conditions(asset_key):
@@ -507,10 +697,21 @@ def get_my_report_asset_options(current_user=None):
         sort_order=-1,
     )
 
-    assets = [
-        _serialize_asset_option(normalize_asset(item))
-        for item in raw_assets
-    ]
+    assets = []
+
+    for item in raw_assets:
+        asset = normalize_asset(item)
+
+        # Không hiện tài sản hỏng / không còn đang sử dụng.
+        if not _is_asset_usable_for_report(asset):
+            continue
+
+        # Nếu chính user này đã tạo báo cáo cho tài sản này,
+        # không hiện tài sản đó trong dropdown nữa.
+        if _asset_has_locked_report(asset, current_user=current_user):
+            continue
+
+        assets.append(_serialize_asset_option(asset))
 
     return {
         "success": True,
@@ -551,7 +752,7 @@ def get_reports(filters=None, current_user=None):
         limit = 10
 
     page = max(1, page)
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, 10))
     skip = (page - 1) * limit
 
     query = _build_report_query(
@@ -623,6 +824,12 @@ def get_report_by_id(report_id, current_user=None):
 def create_report(data, uploaded_files=None, current_user=None):
     data = data or {}
 
+    if _current_user_role(current_user) not in ALLOWED_CREATE_REPORT_ROLES:
+        return {
+            "success": False,
+            "message": "Bạn không có quyền tạo báo cáo.",
+        }, 403
+
     errors = _validate_create_data(data)
 
     if errors:
@@ -649,16 +856,19 @@ def create_report(data, uploaded_files=None, current_user=None):
                 "message": asset_error,
             }, 400
 
-    report_code = _value(data, "report_code", default="")
+        if _asset_has_locked_report(asset, current_user=current_user):
+            return {
+                "success": False,
+                "message": "Bạn đã tạo báo cáo cho tài sản này. Vui lòng chọn tài sản khác.",
+            }, 409
 
-    if not report_code:
-        report_code = generate_report_code()
-
-    if find_report_by_code(report_code):
+    try:
+        report_code = generate_unique_report_code()
+    except ValueError as error:
         return {
             "success": False,
-            "message": "Mã báo cáo đã tồn tại.",
-        }, 409
+            "message": str(error),
+        }, 500
 
     saved_files, file_error = _save_files(uploaded_files)
 
@@ -755,17 +965,6 @@ def update_report(report_id, data, uploaded_files=None, current_user=None):
             "message": "Báo cáo đã hoàn thành, không thể chỉnh sửa.",
         }, 400
 
-    new_report_code = _value(data, "report_code", default=None)
-
-    if new_report_code and new_report_code != report.get("report_code"):
-        existing_report = find_report_by_code(new_report_code)
-
-        if existing_report and str(existing_report.get("_id")) != str(report.get("_id")):
-            return {
-                "success": False,
-                "message": "Mã báo cáo đã tồn tại.",
-            }, 409
-
     new_report_type = _value(data, "report_type", "type", default=None)
 
     if new_report_type and not _validate_report_type(new_report_type):
@@ -793,7 +992,6 @@ def update_report(report_id, data, uploaded_files=None, current_user=None):
     update_data = {}
 
     editable_fields = {
-        "report_code": ("report_code",),
         "report_name": ("report_name", "title", "name"),
         "report_type": ("report_type", "type"),
         "description": ("description", "content"),
@@ -1035,7 +1233,7 @@ def cancel_report(report_id, data=None, current_user=None):
     }, 200
 
 
-def delete_report(report_id):
+def delete_report(report_id, current_user=None):
     report = find_report_by_query(
         build_report_id_query(report_id)
     )
@@ -1045,6 +1243,12 @@ def delete_report(report_id):
             "success": False,
             "message": "Không tìm thấy báo cáo.",
         }, 404
+
+    if not _can_delete_report(current_user=current_user, report=report):
+        return {
+            "success": False,
+            "message": "Bạn không có quyền xóa báo cáo này.",
+        }, 403
 
     for file_record in report.get("files", []):
         delete_uploaded_file(file_record)

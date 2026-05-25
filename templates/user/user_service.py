@@ -513,3 +513,25 @@ def get_users_stats():
             "user_status": VALID_STATUS
         }
     }, 200
+def get_users_by_roles(roles):
+    if not isinstance(roles, list):
+        roles = [roles]
+
+    users = users_collection.find({
+        "role": {"$in": roles},
+        "status": {"$ne": "NGUNG_HOAT_DONG"}
+    })
+
+    return [user_serializer(user) for user in users]
+
+
+def get_admin_and_manager_users():
+    return get_users_by_roles(["ADMIN", "QUAN_LY"])
+
+
+def get_admin_users():
+    return get_users_by_roles(["ADMIN"])
+
+
+def get_manager_users():
+    return get_users_by_roles(["QUAN_LY"])

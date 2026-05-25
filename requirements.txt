@@ -4,3 +4,5 @@ pymongo
 python-dotenv==1.2.2
 requests
 openpyxl
+flask-socketio
+eventlet

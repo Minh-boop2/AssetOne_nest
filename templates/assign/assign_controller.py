@@ -1,5 +1,10 @@
 from flask import jsonify, request
 
+from templates.notification.notification_service import (
+    notify_asset_assigned_by_user,
+    notify_asset_unassigned_by_user,
+)
+
 from .assign_service import (
     list_assigns,
     find_assign,
@@ -15,6 +20,31 @@ from templates.permission.permission_service import (
 )
 
 from templates.activity.activity_service import create_activity_log
+
+
+def get_current_user_id(current_user):
+    if not current_user:
+        return ""
+
+    return str(
+        current_user.get("_id")
+        or current_user.get("id")
+        or current_user.get("user_id")
+        or ""
+    )
+
+
+def get_current_user_name(current_user):
+    if not current_user:
+        return "Người dùng"
+
+    return (
+        current_user.get("full_name")
+        or current_user.get("name")
+        or current_user.get("email")
+        or current_user.get("employee_code")
+        or "Người dùng"
+    )
 
 
 def get_assign_asset_name(assign):
@@ -51,6 +81,7 @@ def build_assign_metadata(assign):
         "asset_code": assign.get("asset_code"),
         "asset_name": assign.get("asset_name") or assign.get("asset"),
         "type": assign.get("type") or assign.get("category"),
+        "category": assign.get("category") or assign.get("type"),
         "status": assign.get("status"),
         "asset_status": assign.get("asset_status"),
         "user_id": assign.get("user_id"),
@@ -60,6 +91,8 @@ def build_assign_metadata(assign):
         "location": assign.get("location"),
         "date": assign.get("date"),
         "return_date": assign.get("return_date"),
+        "assigned_at": assign.get("assigned_at"),
+        "returned_at": assign.get("returned_at"),
     }
 
 
@@ -73,16 +106,13 @@ def log_assign_activity(
     metadata=None,
 ):
     try:
-        if not current_user:
-            return
+        current_user_id = get_current_user_id(current_user)
 
-        user_id = current_user.get("_id")
-
-        if not user_id:
+        if not current_user_id:
             return
 
         create_activity_log(
-            user_id=str(user_id),
+            user_id=current_user_id,
             action=action,
             module="assign",
             method=method,
@@ -98,50 +128,105 @@ def log_assign_activity(
         pass
 
 
-def build_approve_action(assign):
+def notify_assign_approved(current_user, assign):
+    try:
+        if not assign:
+            return
+
+        notify_asset_assigned_by_user(
+            actor_user=current_user,
+            asset=assign,
+        )
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def notify_assign_rejected_or_unassigned(current_user, assign, old_receiver=None):
+    try:
+        if not assign:
+            return
+
+        notify_asset_unassigned_by_user(
+            actor_user=current_user,
+            asset=assign,
+            old_receiver=old_receiver,
+        )
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def notify_assign_status_changed(current_user, old_assign, item, status):
+    status = (status or "").strip()
+
+    try:
+        if status == "Đang sử dụng":
+            notify_assign_approved(
+                current_user=current_user,
+                assign=item or old_assign,
+            )
+            return
+
+        if status in ["Chưa dùng", "Chưa sử dụng"]:
+            notify_assign_rejected_or_unassigned(
+                current_user=current_user,
+                assign=item or old_assign,
+                old_receiver=get_assign_receiver(old_assign),
+            )
+            return
+
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def build_approve_action(assign, current_user=None):
+    actor_name = get_current_user_name(current_user)
     asset_name = get_assign_asset_name(assign)
     receiver = get_assign_receiver(assign)
 
     if receiver:
-        return f"Duyệt cấp phát {asset_name} cho {receiver}"
+        return f"{actor_name} duyệt cấp phát {asset_name} cho {receiver}"
 
-    return f"Duyệt cấp phát {asset_name}"
+    return f"{actor_name} duyệt cấp phát {asset_name}"
 
 
-def build_reject_action(assign):
+def build_reject_action(assign, current_user=None):
+    actor_name = get_current_user_name(current_user)
     asset_name = get_assign_asset_name(assign)
     receiver = get_assign_receiver(assign)
 
     if receiver:
-        return f"Từ chối / hủy cấp phát {asset_name} của {receiver}"
+        return f"{actor_name} từ chối / hủy cấp phát {asset_name} của {receiver}"
 
-    return f"Từ chối / hủy cấp phát {asset_name}"
+    return f"{actor_name} từ chối / hủy cấp phát {asset_name}"
 
 
-def build_update_status_action(assign, status):
+def build_update_status_action(assign, status, current_user=None):
+    actor_name = get_current_user_name(current_user)
     asset_name = get_assign_asset_name(assign)
     receiver = get_assign_receiver(assign)
 
     if status in ["Chưa dùng", "Chưa sử dụng"]:
         if receiver:
-            return f"Thu hồi {asset_name} từ {receiver}"
+            return f"{actor_name} thu hồi {asset_name} từ {receiver}"
 
-        return f"Thu hồi {asset_name}"
+        return f"{actor_name} thu hồi {asset_name}"
 
     if status == "Đang sử dụng":
         if receiver:
-            return f"Cập nhật cấp phát {asset_name} cho {receiver}"
+            return f"{actor_name} cập nhật cấp phát {asset_name} cho {receiver}"
 
-        return f"Cập nhật cấp phát {asset_name}"
+        return f"{actor_name} cập nhật cấp phát {asset_name}"
 
-    return f"Cập nhật trạng thái cấp phát {asset_name} thành {status}"
+    return f"{actor_name} cập nhật trạng thái cấp phát {asset_name} thành {status}"
 
 
 def register_assign_api_routes(app):
 
-    # Lấy danh sách cấp phát tài sản
-    # ADMIN / QUAN_LY: thấy toàn bộ
-    # NHAN_VIEN: chỉ thấy tài sản/cấp phát của chính mình nếu được cấp quyền assign/view
     @app.route("/api/assign", methods=["GET"])
     @permission_required("assign", "view")
     def assigns_api():
@@ -170,7 +255,6 @@ def register_assign_api_routes(app):
             )
         ), 200
 
-    # Xem chi tiết một bản ghi cấp phát
     @app.route("/api/assign/<string:assign_id>", methods=["GET"])
     @permission_required("assign", "view")
     def get_assign_detail_api(assign_id):
@@ -188,8 +272,6 @@ def register_assign_api_routes(app):
 
         return jsonify(assign), 200
 
-    # Xóa một bản ghi cấp phát
-    # Lưu ý: assign đang là view từ assets, delete nghĩa là xóa asset.
     @app.route("/api/assign/<string:assign_id>", methods=["DELETE"])
     @permission_required("assign", "delete")
     def delete_assign_api(assign_id):
@@ -217,11 +299,12 @@ def register_assign_api_routes(app):
 
         asset_name = get_assign_asset_name(old_assign)
         receiver = get_assign_receiver(old_assign)
+        actor_name = get_current_user_name(current_user)
 
         if receiver:
-            action = f"Xóa bản ghi cấp phát {asset_name} của {receiver}"
+            action = f"{actor_name} xóa bản ghi cấp phát {asset_name} của {receiver}"
         else:
-            action = f"Xóa bản ghi cấp phát {asset_name}"
+            action = f"{actor_name} xóa bản ghi cấp phát {asset_name}"
 
         log_assign_activity(
             current_user=current_user,
@@ -239,7 +322,6 @@ def register_assign_api_routes(app):
             "deleted_count": result["deleted_count"],
         }), 200
 
-    # Duyệt yêu cầu cấp phát tài sản
     @app.route("/api/assign/<string:assign_id>/approve", methods=["PATCH", "POST"])
     @permission_required("assign", "approve")
     def assign_approve_api(assign_id):
@@ -257,15 +339,15 @@ def register_assign_api_routes(app):
 
         if not result["updated"]:
             return jsonify({
-                "message": "Assign not found"
-            }), 404
+                "message": result.get("message") or "Assign not found"
+            }), result.get("status_code", 404)
 
-        item = result.get("item") or old_assign
+        item = result.get("item") or old_assign or {}
         asset_name = get_assign_asset_name(item)
 
         log_assign_activity(
             current_user=current_user,
-            action=build_approve_action(item),
+            action=build_approve_action(item, current_user=current_user),
             method=request.method,
             status_code=200,
             target_id=item.get("id") or assign_id,
@@ -276,6 +358,13 @@ def register_assign_api_routes(app):
             },
         )
 
+        # Gửi notification realtime cho ADMIN + QUAN_LY.
+        # NHAN_VIEN không nhận notification loại này.
+        notify_assign_approved(
+            current_user=current_user,
+            assign=item,
+        )
+
         return jsonify({
             "message": "Assign approved successfully",
             "assign_id": assign_id,
@@ -283,7 +372,6 @@ def register_assign_api_routes(app):
             "item": result["item"],
         }), 200
 
-    # Từ chối / hủy cấp phát tài sản
     @app.route("/api/assign/<string:assign_id>/reject", methods=["PATCH", "POST"])
     @permission_required("assign", "approve")
     def assign_reject_api(assign_id):
@@ -294,6 +382,8 @@ def register_assign_api_routes(app):
             current_user=current_user,
         )
 
+        old_receiver = get_assign_receiver(old_assign)
+
         result = reject_assign(
             assign_id,
             current_user=current_user,
@@ -301,15 +391,15 @@ def register_assign_api_routes(app):
 
         if not result["updated"]:
             return jsonify({
-                "message": "Assign not found"
-            }), 404
+                "message": result.get("message") or "Assign not found"
+            }), result.get("status_code", 404)
 
-        item = result.get("item") or old_assign
+        item = result.get("item") or old_assign or {}
         asset_name = get_assign_asset_name(item)
 
         log_assign_activity(
             current_user=current_user,
-            action=build_reject_action(old_assign or item),
+            action=build_reject_action(old_assign or item, current_user=current_user),
             method=request.method,
             status_code=200,
             target_id=(old_assign or item).get("id") or assign_id,
@@ -320,6 +410,14 @@ def register_assign_api_routes(app):
             },
         )
 
+        # Gửi notification realtime cho ADMIN + QUAN_LY.
+        # NHAN_VIEN không nhận notification loại này.
+        notify_assign_rejected_or_unassigned(
+            current_user=current_user,
+            assign=item,
+            old_receiver=old_receiver,
+        )
+
         return jsonify({
             "message": "Assign rejected successfully",
             "assign_id": assign_id,
@@ -327,7 +425,6 @@ def register_assign_api_routes(app):
             "item": result["item"],
         }), 200
 
-    # Cập nhật trạng thái của bản ghi cấp phát
     @app.route("/api/assign/<string:assign_id>/status", methods=["PATCH"])
     @permission_required("assign", "update")
     def assign_update_status_api(assign_id):
@@ -346,6 +443,8 @@ def register_assign_api_routes(app):
             current_user=current_user,
         )
 
+        old_receiver = get_assign_receiver(old_assign)
+
         result = update_assign_status(
             assign_id,
             status,
@@ -354,15 +453,19 @@ def register_assign_api_routes(app):
 
         if not result["updated"]:
             return jsonify({
-                "message": "Assign not found"
-            }), 404
+                "message": result.get("message") or "Assign not found"
+            }), result.get("status_code", 404)
 
-        item = result.get("item") or old_assign
+        item = result.get("item") or old_assign or {}
         asset_name = get_assign_asset_name(item or old_assign)
 
         log_assign_activity(
             current_user=current_user,
-            action=build_update_status_action(old_assign or item, status),
+            action=build_update_status_action(
+                old_assign or item,
+                status,
+                current_user=current_user,
+            ),
             method=request.method,
             status_code=200,
             target_id=(old_assign or item).get("id") or assign_id,
@@ -372,6 +475,16 @@ def register_assign_api_routes(app):
                 "before": build_assign_metadata(old_assign),
                 "after": build_assign_metadata(item),
             },
+        )
+
+        # Nếu status là Đang sử dụng => thông báo cấp phát.
+        # Nếu status là Chưa dùng / Chưa sử dụng => thông báo thu hồi.
+        # Các thông báo này chỉ gửi ADMIN + QUAN_LY.
+        notify_assign_status_changed(
+            current_user=current_user,
+            old_assign=old_assign,
+            item=item,
+            status=status,
         )
 
         return jsonify({

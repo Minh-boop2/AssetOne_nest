@@ -32,22 +32,46 @@ SEARCH_FIELDS = [
 ]
 
 
-# Những trạng thái trong bảng assets được hiểu là tài sản đang được sử dụng
 USING_STATUS_VALUES = [
     "using",
     "Đang sử dụng",
+    "Dang su dung",
+    "Hoàn thành",
 ]
 
-# Những trạng thái trong bảng assets được hiểu là tài sản chưa được sử dụng
 UNUSED_STATUS_VALUES = [
     "available",
     "Chưa sử dụng",
+    "Chua su dung",
+    "Chưa dùng",
 ]
 
 FULL_ASSIGN_ROLES = [
     "ADMIN",
     "QUAN_LY",
 ]
+
+
+def serialize_datetime(value):
+    if not value:
+        return ""
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    return value
+
+
+def get_current_user_id(current_user):
+    if not current_user:
+        return ""
+
+    return str(
+        current_user.get("_id")
+        or current_user.get("id")
+        or current_user.get("user_id")
+        or ""
+    )
 
 
 def user_can_view_all_assigns(current_user):
@@ -76,23 +100,13 @@ def merge_assign_queries(*queries):
 
 
 def build_assign_visibility_query(current_user=None):
-    """
-    Điều kiện giới hạn dữ liệu cấp phát theo role.
-
-    ADMIN / QUAN_LY:
-        thấy toàn bộ
-
-    NHAN_VIEN:
-        chỉ thấy tài sản/cấp phát có user_id hoặc employee_code trùng với user hiện tại
-    """
-
     if not current_user:
         return {}
 
     if user_can_view_all_assigns(current_user):
         return {}
 
-    current_user_id = str(current_user.get("_id") or "")
+    current_user_id = get_current_user_id(current_user)
     employee_code = current_user.get("employee_code") or ""
 
     owner_conditions = []
@@ -179,8 +193,22 @@ def normalize_assign_from_asset(item):
         "department": row.get("department") or "",
         "location": row.get("location") or "",
 
-        "date": row.get("date") or row.get("assigned_date") or row.get("assigned_at") or "",
-        "return_date": row.get("return_date") or row.get("returned_at") or "",
+        "date": serialize_datetime(
+            row.get("date")
+            or row.get("assigned_date")
+            or row.get("assigned_at")
+            or ""
+        ),
+        "return_date": serialize_datetime(
+            row.get("return_date")
+            or row.get("returned_at")
+            or ""
+        ),
+
+        "assigned_at": serialize_datetime(row.get("assigned_at")),
+        "returned_at": serialize_datetime(row.get("returned_at")),
+        "created_at": serialize_datetime(row.get("created_at")),
+        "updated_at": serialize_datetime(row.get("updated_at")),
 
         "warranty": row.get("warranty") or "",
         "spec": row.get("spec") or row.get("notes") or "",
@@ -362,8 +390,18 @@ def list_assigns(
     location="Tất cả",
     current_user=None,
 ):
-    page = max(1, int(page))
-    per_page = max(1, int(per_page))
+    try:
+        page = int(page)
+    except Exception:
+        page = 1
+
+    try:
+        per_page = int(per_page)
+    except Exception:
+        per_page = 10
+
+    page = max(1, page)
+    per_page = max(1, min(per_page, 100))
 
     filter_query = build_assign_query(
         search=search,
@@ -416,7 +454,7 @@ def list_assigns(
         "scope": {
             "view_all": user_can_view_all_assigns(current_user),
             "role": current_user.get("role") if current_user else None,
-            "user_id": str(current_user.get("_id")) if current_user else None,
+            "user_id": get_current_user_id(current_user),
             "employee_code": current_user.get("employee_code") if current_user else None,
         }
     }
@@ -468,15 +506,13 @@ def build_update_data_for_assign_status(assign_status):
     if assign_status == "Đang sử dụng":
         return {
             "status": "using",
+            "returned_at": "",
             "updated_at": now,
         }
 
     if assign_status in ["Chưa dùng", "Chưa sử dụng"]:
         return {
             "status": "available",
-
-            # Khi chuyển về chưa dùng thì coi như thu hồi / hủy cấp phát.
-            # Xóa thông tin người đang giữ để nhân viên không còn thấy asset này là của mình.
             "user_id": "",
             "employee_code": "",
             "user": "",
@@ -498,6 +534,8 @@ def update_assign_status_by_id(assign_id, assign_status, current_user=None):
             "updated": False,
             "modified_count": 0,
             "item": None,
+            "message": "Trạng thái không hợp lệ",
+            "status_code": 400,
         }
 
     id_query = build_id_query(assign_id)
@@ -520,37 +558,43 @@ def update_assign_status_by_id(assign_id, assign_status, current_user=None):
             "updated": False,
             "modified_count": 0,
             "item": None,
+            "message": "Không tìm thấy bản ghi cấp phát",
+            "status_code": 404,
         }
+
+    updated_item = find_assign(
+        assign_id,
+        current_user=current_user,
+    )
 
     return {
         "updated": True,
         "modified_count": result.modified_count,
-        "item": find_assign(
-            assign_id,
-            current_user=current_user,
-        ),
+        "item": updated_item,
+        "message": "Cập nhật trạng thái cấp phát thành công",
+        "status_code": 200,
     }
 
 
 def approve_assign(assign_id, current_user=None):
     return update_assign_status_by_id(
-        assign_id,
-        "Đang sử dụng",
+        assign_id=assign_id,
+        assign_status="Đang sử dụng",
         current_user=current_user,
     )
 
 
 def reject_assign(assign_id, current_user=None):
     return update_assign_status_by_id(
-        assign_id,
-        "Chưa dùng",
+        assign_id=assign_id,
+        assign_status="Chưa dùng",
         current_user=current_user,
     )
 
 
 def update_assign_status(assign_id, status, current_user=None):
     return update_assign_status_by_id(
-        assign_id,
-        status,
+        assign_id=assign_id,
+        assign_status=status,
         current_user=current_user,
     )

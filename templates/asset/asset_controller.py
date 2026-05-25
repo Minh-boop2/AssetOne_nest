@@ -1,5 +1,12 @@
 from flask import jsonify, request
 
+from templates.notification.notification_service import (
+    notify_asset_created_by_user,
+    notify_assets_bulk_created_by_user,
+    notify_asset_assigned_by_user,
+    notify_asset_unassigned_by_user,
+)
+
 from .asset_service import (
     list_assets,
     find_asset,
@@ -18,6 +25,31 @@ from templates.permission.permission_service import (
 )
 
 from templates.activity.activity_service import create_activity_log
+
+
+def get_current_user_id(current_user):
+    if not current_user:
+        return ""
+
+    return str(
+        current_user.get("_id")
+        or current_user.get("id")
+        or current_user.get("user_id")
+        or ""
+    )
+
+
+def get_current_user_name(current_user):
+    if not current_user:
+        return "Người dùng"
+
+    return (
+        current_user.get("full_name")
+        or current_user.get("name")
+        or current_user.get("email")
+        or current_user.get("employee_code")
+        or "Người dùng"
+    )
 
 
 def get_asset_name(asset):
@@ -49,15 +81,21 @@ def build_asset_metadata(asset):
         return {}
 
     return {
-        "asset_id": asset.get("id"),
+        "asset_id": asset.get("id") or asset.get("_id"),
         "asset_code": asset.get("asset_code"),
         "asset_name": asset.get("asset_name") or asset.get("asset"),
         "type": asset.get("type"),
+        "category": asset.get("category"),
         "status": asset.get("status"),
         "receiver": asset.get("receiver") or asset.get("user"),
+        "user_id": asset.get("user_id"),
         "employee_code": asset.get("employee_code"),
         "department": asset.get("department"),
         "location": asset.get("location"),
+        "assigned_at": asset.get("assigned_at"),
+        "returned_at": asset.get("returned_at"),
+        "created_at": asset.get("created_at"),
+        "updated_at": asset.get("updated_at"),
     }
 
 
@@ -71,16 +109,13 @@ def log_asset_activity(
     metadata=None,
 ):
     try:
-        if not current_user:
-            return
+        current_user_id = get_current_user_id(current_user)
 
-        user_id = current_user.get("_id")
-
-        if not user_id:
+        if not current_user_id:
             return
 
         create_activity_log(
-            user_id=str(user_id),
+            user_id=current_user_id,
             action=action,
             module="assets",
             method=method,
@@ -96,8 +131,53 @@ def log_asset_activity(
         pass
 
 
+def notify_asset_created(current_user, asset):
+    try:
+        notify_asset_created_by_user(
+            actor_user=current_user,
+            asset=asset,
+        )
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def notify_assets_bulk_created(current_user, inserted_count, assets):
+    try:
+        notify_assets_bulk_created_by_user(
+            actor_user=current_user,
+            inserted_count=inserted_count,
+            assets=assets,
+        )
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def notify_asset_assigned(current_user, asset):
+    try:
+        notify_asset_assigned_by_user(
+            actor_user=current_user,
+            asset=asset,
+        )
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
+def notify_asset_unassigned(current_user, asset, old_receiver=None):
+    try:
+        notify_asset_unassigned_by_user(
+            actor_user=current_user,
+            asset=asset,
+            old_receiver=old_receiver,
+        )
+    except Exception:
+        # Không để lỗi notification làm hỏng API chính
+        pass
+
+
 def register_assets_api_routes(app):
-    # phân trang và lọc tài sản
     # ADMIN / QUAN_LY: thấy toàn bộ tài sản
     # NHAN_VIEN: chỉ thấy tài sản đã cấp phát cho chính nhân viên đó
     @app.route("/api/assets", methods=["GET"])
@@ -124,14 +204,17 @@ def register_assets_api_routes(app):
             )
         ), 200
 
-    # lấy danh sách loại tài sản
     @app.route("/api/assets/types", methods=["GET"])
     @permission_required("assets", "view")
     def asset_types_api():
         current_user = get_current_user_from_request()
-        return jsonify(get_asset_type_options(current_user=current_user)), 200
 
-    # tạo tài sản mới đơn lẻ
+        return jsonify(
+            get_asset_type_options(
+                current_user=current_user,
+            )
+        ), 200
+
     @app.route("/api/assets", methods=["POST"])
     @permission_required("assets", "create")
     def create_asset_api():
@@ -163,10 +246,11 @@ def register_assets_api_routes(app):
 
         item = result["item"]
         asset_name = get_asset_name(item)
+        actor_name = get_current_user_name(current_user)
 
         log_asset_activity(
             current_user=current_user,
-            action=f"Tạo mới tài sản {asset_name}",
+            action=f"{actor_name} tạo mới tài sản {asset_name}",
             method=request.method,
             status_code=201,
             target_id=item.get("id"),
@@ -174,12 +258,18 @@ def register_assets_api_routes(app):
             metadata=build_asset_metadata(item),
         )
 
+        # Gửi thông báo realtime cho ADMIN + QUAN_LY
+        # NHAN_VIEN không nhận thông báo loại này
+        notify_asset_created(
+            current_user=current_user,
+            asset=item,
+        )
+
         return jsonify({
             "message": "Asset created successfully",
             "item": item,
         }), 201
 
-    # tạo nhiều tài sản cùng lúc
     @app.route("/api/assets/bulk", methods=["POST"])
     @permission_required("assets", "create")
     def create_many_assets_api():
@@ -216,18 +306,29 @@ def register_assets_api_routes(app):
                 "skipped_items": result.get("skipped_items", []),
             }), result.get("status_code", 400)
 
+        actor_name = get_current_user_name(current_user)
+        inserted_count = result["inserted_count"]
+
         log_asset_activity(
             current_user=current_user,
-            action=f"Tạo mới {result['inserted_count']} tài sản",
+            action=f"{actor_name} tạo mới {inserted_count} tài sản",
             method=request.method,
             status_code=201,
             target_id=None,
-            target_name=f"{result['inserted_count']} tài sản",
+            target_name=f"{inserted_count} tài sản",
             metadata={
-                "inserted_count": result["inserted_count"],
+                "inserted_count": inserted_count,
                 "ids": result.get("ids", []),
                 "skipped_items": result.get("skipped_items", []),
             },
+        )
+
+        # Gửi thông báo realtime cho ADMIN + QUAN_LY
+        # NHAN_VIEN không nhận thông báo loại này
+        notify_assets_bulk_created(
+            current_user=current_user,
+            inserted_count=inserted_count,
+            assets=result.get("items", []),
         )
 
         return jsonify({
@@ -238,7 +339,6 @@ def register_assets_api_routes(app):
             "skipped_items": result.get("skipped_items", []),
         }), 201
 
-    # chi tiết tài sản
     @app.route("/api/assets/<string:asset_id>", methods=["GET"])
     @permission_required("assets", "view")
     def get_asset_detail_api(asset_id):
@@ -252,7 +352,6 @@ def register_assets_api_routes(app):
 
         return jsonify(asset), 200
 
-    # cập nhật tài sản
     @app.route("/api/assets/<string:asset_id>", methods=["PUT", "PATCH"])
     @permission_required("assets", "update")
     def update_asset_api(asset_id):
@@ -280,10 +379,11 @@ def register_assets_api_routes(app):
 
         item = result["item"]
         asset_name = get_asset_name(item)
+        actor_name = get_current_user_name(current_user)
 
         log_asset_activity(
             current_user=current_user,
-            action=f"Cập nhật tài sản {asset_name}",
+            action=f"{actor_name} cập nhật tài sản {asset_name}",
             method=request.method,
             status_code=200,
             target_id=item.get("id"),
@@ -300,7 +400,6 @@ def register_assets_api_routes(app):
             "item": item,
         }), 200
 
-    # xóa tài sản
     @app.route("/api/assets/<string:asset_id>", methods=["DELETE"])
     @permission_required("assets", "delete")
     def delete_asset_api(asset_id):
@@ -321,10 +420,11 @@ def register_assets_api_routes(app):
             }), 404
 
         asset_name = get_asset_name(old_asset)
+        actor_name = get_current_user_name(current_user)
 
         log_asset_activity(
             current_user=current_user,
-            action=f"Xóa tài sản {asset_name}",
+            action=f"{actor_name} xóa tài sản {asset_name}",
             method=request.method,
             status_code=200,
             target_id=old_asset.get("id") or asset_id,
@@ -338,7 +438,6 @@ def register_assets_api_routes(app):
             "deleted_count": result["deleted_count"],
         }), 200
 
-    # gán tài sản cho người dùng
     @app.route("/api/assets/<string:asset_id>/assign", methods=["PATCH"])
     @permission_required("assets", "update")
     def assign_asset_api(asset_id):
@@ -360,10 +459,11 @@ def register_assets_api_routes(app):
         item = result["item"]
         asset_name = get_asset_name(item)
         receiver = get_asset_receiver(item)
+        actor_name = get_current_user_name(current_user)
 
         log_asset_activity(
             current_user=current_user,
-            action=f"Cấp phát {asset_name} cho {receiver}",
+            action=f"{actor_name} cấp phát {asset_name} cho {receiver}",
             method=request.method,
             status_code=200,
             target_id=item.get("id"),
@@ -371,12 +471,18 @@ def register_assets_api_routes(app):
             metadata=build_asset_metadata(item),
         )
 
+        # Gửi thông báo realtime cho ADMIN + QUAN_LY
+        # Người được cấp phát là NHAN_VIEN sẽ không nhận notification loại admin này
+        notify_asset_assigned(
+            current_user=current_user,
+            asset=item,
+        )
+
         return jsonify({
             "message": result["message"],
             "item": item,
         }), 200
 
-    # hủy gán tài sản
     @app.route("/api/assets/<string:asset_id>/unassign", methods=["PATCH"])
     @permission_required("assets", "update")
     def unassign_asset_api(asset_id):
@@ -394,11 +500,12 @@ def register_assets_api_routes(app):
 
         item = result["item"]
         asset_name = get_asset_name(item)
+        actor_name = get_current_user_name(current_user)
 
         if old_receiver:
-            action = f"Thu hồi {asset_name} từ {old_receiver}"
+            action = f"{actor_name} thu hồi {asset_name} từ {old_receiver}"
         else:
-            action = f"Thu hồi {asset_name}"
+            action = f"{actor_name} thu hồi {asset_name}"
 
         log_asset_activity(
             current_user=current_user,
@@ -411,6 +518,14 @@ def register_assets_api_routes(app):
                 "before": build_asset_metadata(old_asset),
                 "after": build_asset_metadata(item),
             },
+        )
+
+        # Gửi thông báo realtime cho ADMIN + QUAN_LY
+        # NHAN_VIEN không nhận thông báo loại này
+        notify_asset_unassigned(
+            current_user=current_user,
+            asset=item,
+            old_receiver=old_receiver,
         )
 
         return jsonify({
