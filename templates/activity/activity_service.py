@@ -1,7 +1,10 @@
 from bson import ObjectId
 from pymongo import DESCENDING
 import unicodedata
-
+from io import BytesIO
+from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from mongo import activities_collection, users_collection
 
 from templates.activity.activity_model import (
@@ -701,3 +704,183 @@ def get_activity_stats(current_user_id):
             "delete_count": delete_count,
         }
     }, 200
+def detect_activity_export_type(activity):
+    module = str(activity.get("module") or "").lower()
+    action = str(activity.get("action") or "").lower()
+    path = str(activity.get("path") or "").lower()
+    target_name = str(activity.get("target_name") or "").lower()
+
+    text = f"{module} {action} {path} {target_name}"
+
+    if "report" in text or "báo cáo" in text or "bao cao" in text:
+        return "Báo cáo"
+
+    if "thu hồi" in text or "thu hoi" in text or "recover" in text or "recall" in text or "return" in text:
+        return "Thu hồi"
+
+    if "assign" in text or "cấp phát" in text or "cap phat" in text:
+        return "Cấp phát"
+
+    if "asset" in text or "tài sản" in text or "tai san" in text:
+        return "Tài sản"
+
+    if "user" in text or "người dùng" in text or "nguoi dung" in text:
+        return "Người dùng"
+
+    if "permission" in text or "phân quyền" in text or "phan quyen" in text:
+        return "Phân quyền"
+
+    if "mail" in text or "email" in text:
+        return "Mail"
+
+    if "activity" in text or "hoạt động" in text or "hoat dong" in text:
+        return "Hoạt động"
+
+    return "Hệ thống"
+
+
+def format_activity_export_time(value):
+    if not value:
+        return ""
+
+    if isinstance(value, datetime):
+        return value.strftime("%H:%M %d/%m/%Y")
+
+    text = str(value).strip()
+
+    if not text:
+        return ""
+
+    clean_text = text.replace("Z", "").replace("+00:00", "")
+
+    formats = [
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%H:%M %d/%m/%Y",
+        "%d/%m/%Y %H:%M",
+    ]
+
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(clean_text[:26], fmt)
+            return parsed.strftime("%H:%M %d/%m/%Y")
+        except Exception:
+            pass
+
+    return text
+
+
+def build_activity_export_description(activity):
+    action = activity.get("action") or ""
+    target_name = activity.get("target_name") or ""
+    path = activity.get("path") or ""
+
+    if target_name:
+        return f'{action} "{target_name}"'
+
+    if path:
+        return f"{action} ({path})"
+
+    return action or "Không có mô tả"
+
+
+def get_activities_export(args, current_user_id):
+    current_user = get_current_user_by_id(current_user_id)
+
+    if not current_user:
+        return None, None, {
+            "success": False,
+            "message": "Không tìm thấy user hiện tại"
+        }, 404
+
+    query, error_response, error_status = build_activity_query(args, current_user)
+
+    if error_response:
+        return None, None, error_response, error_status
+
+    activities = (
+        activities_collection
+        .find(query)
+        .sort("created_at", DESCENDING)
+        .limit(10000)
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hoạt động"
+
+    headers = [
+        "Người thực hiện",
+        "Hành động",
+        "Loại đối tượng",
+        "Mô tả",
+        "Thời gian",
+    ]
+
+    ws.append(headers)
+
+    header_fill = PatternFill("solid", fgColor="D9EAF7")
+    header_font = Font(bold=True, color="000000")
+    thin_border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9"),
+    )
+
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    row_index = 2
+
+    for activity in activities:
+        full_name = (
+            activity.get("full_name")
+            or activity.get("email")
+            or activity.get("employee_code")
+            or "Chưa xác định"
+        )
+
+        action = activity.get("action") or "Thao tác hệ thống"
+        activity_type = detect_activity_export_type(activity)
+        description = build_activity_export_description(activity)
+        created_at = activity.get("created_at") or activity.get("updated_at") or activity.get("time")
+
+        ws.append([
+            full_name,
+            action,
+            activity_type,
+            description,
+            format_activity_export_time(created_at),
+        ])
+
+        for cell in ws[row_index]:
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+        row_index += 1
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 20
+    ws.column_dimensions["D"].width = 62
+    ws.column_dimensions["E"].width = 20
+
+    for row in ws.iter_rows(min_row=2):
+        ws.row_dimensions[row[0].row].height = 22
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"Activities_{filename_time}.xlsx"
+
+    return output, filename, None, 200

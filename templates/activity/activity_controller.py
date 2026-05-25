@@ -1,11 +1,11 @@
-from flask import request, jsonify
-
+from flask import request, jsonify, send_file
 from templates.activity.activity_service import (
     create_activity_log,
     get_activities,
     get_activity_by_id,
     get_activity_stats,
     get_activity_filter_options,
+    get_activities_export,
     build_action_from_request,
     detect_module_from_path,
     clean_metadata,
@@ -59,7 +59,32 @@ def register_activity_api_routes(app):
         response, status_code = get_activity_stats(current_user_id)
 
         return jsonify(response), status_code
+    
+    @app.route("/api/activities/export", methods=["GET"])
+    def api_export_activities():
+        current_user_id = get_current_user_id_from_header()
 
+        if not current_user_id:
+            return jsonify({
+                "success": False,
+                "message": "Thiếu X-User-Id"
+            }), 401
+
+        file_stream, filename, error_response, status_code = get_activities_export(
+            request.args,
+            current_user_id
+        )
+
+        if error_response:
+            return jsonify(error_response), status_code
+
+        return send_file(
+            file_stream,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    
     @app.route("/api/activities/<activity_id>", methods=["GET"])
     def api_get_activity_by_id(activity_id):
         current_user_id = get_current_user_id_from_header()
