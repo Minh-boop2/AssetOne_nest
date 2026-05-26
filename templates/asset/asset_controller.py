@@ -17,6 +17,7 @@ from .asset_service import (
     get_asset_type_options,
     assign_asset,
     unassign_asset,
+    update_asset_status_action,
 )
 
 from templates.permission.permission_service import (
@@ -526,6 +527,57 @@ def register_assets_api_routes(app):
             current_user=current_user,
             asset=item,
             old_receiver=old_receiver,
+        )
+        
+
+        return jsonify({
+            "message": result["message"],
+            "item": item,
+        }), 200
+    @app.route("/api/assets/<string:asset_id>/status-action", methods=["PATCH"])
+    @permission_required("assets", "update")
+    def asset_status_action_api(asset_id):
+        current_user = get_current_user_from_request()
+        data = request.get_json(silent=True)
+
+        if not data or not isinstance(data, dict):
+            return jsonify({
+                "message": "Body phải là object JSON. Cần gửi action."
+            }), 400
+
+        action = data.get("action")
+
+        old_asset = find_asset(asset_id, current_user=current_user)
+
+        result = update_asset_status_action(
+            asset_id=asset_id,
+            action=action,
+            current_user=current_user,
+        )
+
+        if not result["success"]:
+            return jsonify({
+                "message": result["message"]
+            }), result.get("status_code", 400)
+
+        item = result["item"]
+        asset_name = get_asset_name(item)
+        actor_name = get_current_user_name(current_user)
+
+        log_asset_activity(
+            current_user=current_user,
+            action=f"{actor_name} cập nhật trạng thái tài sản {asset_name}: {result.get('old_status')} -> {result.get('new_status')}",
+            method=request.method,
+            status_code=200,
+            target_id=item.get("id"),
+            target_name=asset_name,
+            metadata={
+                "before": build_asset_metadata(old_asset),
+                "after": build_asset_metadata(item),
+                "status_action": action,
+                "old_status": result.get("old_status"),
+                "new_status": result.get("new_status"),
+            },
         )
 
         return jsonify({

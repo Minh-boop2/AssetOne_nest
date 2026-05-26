@@ -1037,3 +1037,87 @@ def get_dashboard_assets_overview(limit=4, current_user=None):
         },
         "recent_assets": recent_assets,
     }
+ASSET_STATUS_ACTIONS = {
+    "send_maintenance": {
+        "from": ["broken"],
+        "to": "maintenance",
+        "message": "Đã chuyển tài sản sang trạng thái Bảo trì",
+    },
+    "reject_broken": {
+        "from": ["broken"],
+        "to": "broken",
+        "message": "Đã từ chối, tài sản vẫn ở trạng thái Hỏng",
+    },
+    "maintenance_done": {
+        "from": ["maintenance"],
+        "to": "available",
+        "message": "Đã hoàn thành bảo trì, tài sản chuyển sang Chưa sử dụng",
+    },
+    "maintenance_not_done": {
+        "from": ["maintenance"],
+        "to": "maintenance",
+        "message": "Bảo trì chưa hoàn thành, tài sản vẫn ở trạng thái Bảo trì",
+    },
+}
+
+
+def update_asset_status_action(asset_id, action, current_user=None):
+    rule = ASSET_STATUS_ACTIONS.get(action)
+
+    if not rule:
+        return {
+            "success": False,
+            "message": "Action không hợp lệ",
+            "status_code": 400,
+        }
+
+    asset_id_query = build_asset_id_query(asset_id)
+    visibility_query = build_asset_visibility_query(current_user)
+
+    find_query = merge_asset_queries(
+        asset_id_query,
+        visibility_query,
+    )
+
+    asset = find_asset_by_query(find_query)
+
+    if not asset:
+        return {
+            "success": False,
+            "message": "Không tìm thấy tài sản",
+            "status_code": 404,
+        }
+
+    current_status = normalize_status_code(asset.get("status"))
+
+    if current_status not in rule["from"]:
+        return {
+            "success": False,
+            "message": f"Không thể thực hiện action này khi tài sản đang ở trạng thái {STATUS_LABELS.get(current_status, current_status)}",
+            "status_code": 400,
+        }
+
+    now = datetime.utcnow()
+
+    update_data = {
+        "status": rule["to"],
+        "updated_at": now,
+    }
+
+    update_query = {
+        "_id": asset.get("_id")
+    }
+
+    update_asset_by_query(update_query, update_data)
+
+    updated_asset = find_asset_by_query(update_query)
+
+    return {
+        "success": True,
+        "message": rule["message"],
+        "item": normalize_asset(updated_asset),
+        "old_status": current_status,
+        "new_status": rule["to"],
+        "action": action,
+        "status_code": 200,
+    }
