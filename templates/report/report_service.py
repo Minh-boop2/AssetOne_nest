@@ -1,3 +1,4 @@
+# Service report: xử lý logic chính của báo cáo, quyền xem, upload file và thao tác tài sản
 import math
 import re
 from bson import ObjectId
@@ -37,19 +38,23 @@ from templates.asset.asset_service import (
 )
 
 
+# Các role được xem toàn bộ báo cáo
 FULL_REPORT_ROLES = ["ADMIN", "QUAN_LY"]
 
+# Các trường bắt buộc khi tạo báo cáo
 REQUIRED_CREATE_FIELDS = {
     "report_name": "Vui lòng nhập tên báo cáo.",
     "report_type": "Vui lòng chọn loại báo cáo.",
     "description": "Vui lòng nhập nội dung báo cáo.",
 }
 
+# Các loại báo cáo bắt buộc phải chọn tài sản
 ASSET_REQUIRED_REPORT_TYPES = [
     "Báo hỏng",
     "Cần cấp mới",
 ]
 
+# Các trạng thái tài sản được hiểu là đang sử dụng
 USING_STATUS_VALUES = [
     "using",
     "Đang sử dụng",
@@ -58,28 +63,35 @@ USING_STATUS_VALUES = [
 
 # Những trạng thái báo cáo KHÔNG khóa tài sản khỏi dropdown chọn tài sản.
 # Báo cáo đang chờ xử lý sẽ khóa tài sản; Hoàn thành / Đã hủy thì tài sản được hiện lại.
+# Các trạng thái báo cáo không còn khóa tài sản trong dropdown
 REPORT_ASSET_UNLOCKED_STATUSES = [
     "Đã hủy",
     "Hoàn thành",
 ]
 
+# Các role được phép tạo báo cáo
 ALLOWED_CREATE_REPORT_ROLES = [
     "ADMIN",
     "QUAN_LY",
     "NHAN_VIEN",
 ]
 
+# Các role được phép xóa báo cáo
 ALLOWED_DELETE_REPORT_ROLES = [
     "ADMIN",
     "QUAN_LY",
     "NHAN_VIEN",
 ]
 
+# Tiền tố mã báo cáo tự sinh
 REPORT_CODE_PREFIX = "REPORT"
+# Độ dài phần random trong mã báo cáo
 REPORT_CODE_LENGTH = 8
+# Số lần thử tối đa khi tạo mã báo cáo không trùng
 REPORT_CODE_MAX_ATTEMPTS = 50
 
 
+# Tạo mã báo cáo ngẫu nhiên và đảm bảo không bị trùng
 def generate_unique_report_code():
     alphabet = string.ascii_uppercase + string.digits
 
@@ -97,6 +109,7 @@ def generate_unique_report_code():
     raise ValueError("Không thể tạo mã báo cáo không trùng. Vui lòng thử lại.")
 
 
+# Lấy giá trị từ data theo nhiều tên field khác nhau
 def _value(data, *keys, default=""):
     data = data or {}
 
@@ -112,6 +125,7 @@ def _value(data, *keys, default=""):
     return default
 
 
+# Lấy id của user hiện tại
 def _current_user_id(current_user):
     if not current_user:
         return ""
@@ -119,6 +133,7 @@ def _current_user_id(current_user):
     return str(current_user.get("_id") or current_user.get("id") or "")
 
 
+# Lấy tên hiển thị của user hiện tại
 def _current_user_name(current_user):
     if not current_user:
         return ""
@@ -131,6 +146,7 @@ def _current_user_name(current_user):
     )
 
 
+# Đổi role trong database sang tên role dễ hiển thị
 def _current_user_role_label(current_user):
     role = (current_user or {}).get("role") or ""
 
@@ -146,10 +162,12 @@ def _current_user_role_label(current_user):
     return role
 
 
+# Lấy role gốc của user hiện tại
 def _current_user_role(current_user):
     return (current_user or {}).get("role") or ""
 
 
+# Lấy phòng ban của user hiện tại
 def _current_user_department(current_user):
     return (
         (current_user or {}).get("department")
@@ -157,6 +175,7 @@ def _current_user_department(current_user):
     )
 
 
+# Lấy vị trí hoặc tầng của user hiện tại
 def _current_user_location(current_user):
     return (
         (current_user or {}).get("floor")
@@ -165,6 +184,7 @@ def _current_user_location(current_user):
     )
 
 
+# Kiểm tra user có quyền xem tất cả báo cáo hay không
 def _can_view_all_reports(current_user):
     if not current_user:
         return False
@@ -172,6 +192,7 @@ def _can_view_all_reports(current_user):
     return current_user.get("role") in FULL_REPORT_ROLES
 
 
+# Gộp nhiều query MongoDB lại bằng $and
 def _merge_queries(*queries):
     clean_queries = []
 
@@ -190,6 +211,7 @@ def _merge_queries(*queries):
     }
 
 
+# Tạo query giới hạn báo cáo theo quyền xem của user
 def _build_report_visibility_query(current_user=None):
     if not current_user:
         return {}
@@ -224,6 +246,7 @@ def _build_report_visibility_query(current_user=None):
     }
 
 
+# Tạo điều kiện tìm tài sản thuộc user hiện tại
 def _build_asset_owner_conditions(current_user=None):
     if not current_user:
         return []
@@ -246,6 +269,7 @@ def _build_asset_owner_conditions(current_user=None):
     return conditions
 
 
+# Tạo điều kiện tìm báo cáo do user hiện tại tạo
 def _build_report_owner_conditions(current_user=None):
     if not current_user:
         return []
@@ -274,6 +298,7 @@ def _build_report_owner_conditions(current_user=None):
     return conditions
 
 
+# Chuẩn hóa giá trị thành chuỗi để so sánh key
 def _string_key(value):
     value = str(value or "").strip()
 
@@ -283,6 +308,7 @@ def _string_key(value):
     return value
 
 
+# Lấy các khóa nhận diện tài sản để kiểm tra tài sản có bị khóa không
 def _get_asset_lock_keys(asset):
     asset = asset or {}
 
@@ -297,6 +323,7 @@ def _get_asset_lock_keys(asset):
     return keys
 
 
+# Lấy các tài sản mà user đã tạo báo cáo nhưng chưa xử lý xong
 def _get_current_user_reported_asset_keys(current_user=None):
     owner_conditions = _build_report_owner_conditions(current_user)
 
@@ -334,6 +361,7 @@ def _get_current_user_reported_asset_keys(current_user=None):
     return locked_keys
 
 
+# Kiểm tra tài sản đã có báo cáo đang chờ xử lý chưa
 def _asset_has_locked_report(asset, current_user=None):
     asset_keys = _get_asset_lock_keys(asset)
 
@@ -345,6 +373,7 @@ def _asset_has_locked_report(asset, current_user=None):
     return bool(asset_keys.intersection(locked_keys))
 
 
+# Kiểm tra tài sản có đang sử dụng để được chọn báo cáo không
 def _is_asset_usable_for_report(asset):
     asset = asset or {}
     status = str(asset.get("status") or "").strip().lower()
@@ -358,6 +387,7 @@ def _is_asset_usable_for_report(asset):
     ]
 
 
+# Kiểm tra báo cáo có thuộc user hiện tại không
 def _is_own_report(report, current_user=None):
     if not report or not current_user:
         return False
@@ -378,6 +408,7 @@ def _is_own_report(report, current_user=None):
     return False
 
 
+# Kiểm tra user có được xóa báo cáo này không
 def _can_delete_report(current_user=None, report=None):
     role = _current_user_role(current_user)
 
@@ -393,6 +424,7 @@ def _can_delete_report(current_user=None, report=None):
     return False
 
 
+# Tạo điều kiện tìm tài sản bằng asset_code hoặc ObjectId
 def _build_asset_key_conditions(asset_key):
     asset_key = str(asset_key or "").strip()
 
@@ -413,6 +445,7 @@ def _build_asset_key_conditions(asset_key):
     return conditions
 
 
+# Tạo query tìm tài sản đang sử dụng của user hiện tại
 def _build_owned_asset_query(current_user=None, asset_key=None):
     owner_conditions = _build_asset_owner_conditions(current_user)
 
@@ -445,14 +478,17 @@ def _build_owned_asset_query(current_user=None, asset_key=None):
     }
 
 
+# Kiểm tra loại báo cáo có hợp lệ không
 def _validate_report_type(report_type):
     return report_type in REPORT_TYPES
 
 
+# Kiểm tra trạng thái báo cáo có hợp lệ không
 def _validate_status(status):
     return status in REPORT_STATUSES
 
 
+# Kiểm tra dữ liệu bắt buộc khi tạo báo cáo
 def _validate_create_data(data):
     errors = []
 
@@ -484,6 +520,7 @@ def _validate_create_data(data):
     return errors
 
 
+# Lưu nhiều file upload, nếu lỗi thì xóa lại file đã lưu
 def _save_files(uploaded_files):
     saved_files = []
 
@@ -506,6 +543,7 @@ def _save_files(uploaded_files):
     return saved_files, None
 
 
+# Tìm user đã gửi báo cáo bằng user_id, mã nhân viên hoặc email
 def _find_user_for_report(report):
     reporter_user_id = report.get("reporter_user_id")
     reporter_employee_code = report.get("reporter_employee_code")
@@ -538,6 +576,7 @@ def _find_user_for_report(report):
     return None
 
 
+# Lấy khóa tài sản từ data gửi lên
 def _get_asset_key_from_data(data):
     return (
         _value(data, "asset_id", default="")
@@ -546,6 +585,7 @@ def _get_asset_key_from_data(data):
     )
 
 
+# Lấy khóa tài sản từ dữ liệu báo cáo
 def _get_asset_key_from_report(report):
     return (
         report.get("asset_id")
@@ -555,6 +595,7 @@ def _get_asset_key_from_report(report):
     )
 
 
+# Tìm tài sản đang sở hữu của user để gắn vào báo cáo
 def _get_owned_asset(asset_key, current_user=None):
     if not asset_key:
         return None, "Vui lòng chọn tài sản."
@@ -580,6 +621,7 @@ def _get_owned_asset(asset_key, current_user=None):
     return asset, None
 
 
+# Tạo query lọc danh sách báo cáo theo search, loại, trạng thái, phòng ban, vị trí
 def _build_report_query(filters=None, current_user=None):
     filters = filters or {}
     conditions = []
@@ -653,6 +695,7 @@ def _build_report_query(filters=None, current_user=None):
     }
 
 
+# Chuẩn hóa tài sản thành option để frontend hiển thị dropdown
 def _serialize_asset_option(asset):
     return {
         "id": asset.get("id"),
@@ -680,6 +723,7 @@ def _serialize_asset_option(asset):
     }
 
 
+# Đổi dữ liệu bất kỳ về list để trả về frontend
 def _as_list(value):
     if value is None:
         return []
@@ -696,6 +740,7 @@ def _as_list(value):
     return list(value)
 
 
+# Lấy danh sách loại báo cáo, trạng thái, role và định dạng file được phép
 def get_report_options(current_user=None):
     return {
         "success": True,
@@ -715,6 +760,7 @@ def get_report_options(current_user=None):
     }, 200
 
 
+# Lấy danh sách tài sản đang dùng của user để tạo báo cáo
 def get_my_report_asset_options(current_user=None):
     if not current_user:
         return {
@@ -833,6 +879,7 @@ def get_my_report_asset_options(current_user=None):
         "data": items,
     }, 200
 
+# Lấy danh sách báo cáo có phân trang và bộ lọc
 def get_reports(filters=None, current_user=None):
     filters = filters or {}
 
@@ -894,6 +941,7 @@ def get_reports(filters=None, current_user=None):
 
 
 
+# Lấy chi tiết một báo cáo theo id hoặc mã báo cáo
 def get_report_by_id(report_id, current_user=None):
     report_query = build_report_id_query(report_id)
     visibility_query = _build_report_visibility_query(current_user)
@@ -918,6 +966,7 @@ def get_report_by_id(report_id, current_user=None):
     }, 200
 
 
+# Tạo báo cáo mới, kiểm tra dữ liệu, tài sản và lưu file nếu có
 def create_report(data, uploaded_files=None, current_user=None):
     data = data or {}
 
@@ -1037,6 +1086,7 @@ def create_report(data, uploaded_files=None, current_user=None):
     }, 201
 
 
+# Cập nhật báo cáo, có thể sửa thông tin hoặc thêm file
 def update_report(report_id, data, uploaded_files=None, current_user=None):
     data = data or {}
 
@@ -1156,6 +1206,7 @@ def update_report(report_id, data, uploaded_files=None, current_user=None):
     }, 200
 
 
+# Duyệt báo cáo và xử lý tài sản theo loại báo cáo
 def approve_report(report_id, data=None, current_user=None):
     data = data or {}
 
@@ -1286,6 +1337,7 @@ def approve_report(report_id, data=None, current_user=None):
     }, 200
 
 
+# Hủy báo cáo và lưu lý do hủy
 def cancel_report(report_id, data=None, current_user=None):
     data = data or {}
 
@@ -1331,6 +1383,7 @@ def cancel_report(report_id, data=None, current_user=None):
     }, 200
 
 
+# Xóa báo cáo và xóa luôn các file đã upload
 def delete_report(report_id, current_user=None):
     report = find_report_by_query(
         build_report_id_query(report_id)
@@ -1363,6 +1416,7 @@ def delete_report(report_id, current_user=None):
     }, 200
 
 
+# Xóa một file trong báo cáo
 def delete_report_file(report_id, file_id, current_user=None):
     report_query = build_report_id_query(report_id)
     visibility_query = _build_report_visibility_query(current_user)
@@ -1419,6 +1473,7 @@ def delete_report_file(report_id, file_id, current_user=None):
     }, 200
 
 
+# Thống kê tổng số báo cáo, trạng thái, loại và số file
 def get_report_overview(current_user=None):
     visibility_query = _build_report_visibility_query(current_user)
 

@@ -1,3 +1,6 @@
+# File xử lý các API liên quan đến notification
+# Controller nhận request từ frontend rồi gọi service để xử lý
+
 from flask import request, jsonify
 
 from templates.notification.notification_service import (
@@ -12,6 +15,8 @@ from templates.notification.notification_service import (
 )
 
 
+# Chuyển giá trị query sang True / False
+# Ví dụ: true, 1, yes, y thì hiểu là True
 def _get_bool(value):
     if value is None:
         return False
@@ -19,6 +24,8 @@ def _get_bool(value):
     return str(value).lower() in ["true", "1", "yes", "y"]
 
 
+# Lấy số lượng notification muốn lấy từ query
+# Giới hạn từ 1 đến 100 để tránh lấy quá nhiều dữ liệu
 def _get_limit():
     try:
         limit = int(request.args.get("limit", 50))
@@ -34,6 +41,7 @@ def _get_limit():
     return limit
 
 
+# Lấy user_id từ header trước, nếu không có thì lấy từ query
 def _get_user_id_from_request():
     return (
         request.headers.get("X-User-Id")
@@ -42,12 +50,15 @@ def _get_user_id_from_request():
     )
 
 
+# Đăng ký toàn bộ API route liên quan đến notification
+# Nếu có socketio thì khởi tạo realtime notification luôn
 def register_notifications_api_routes(app, socketio=None):
     if socketio:
         init_notification_socket(socketio)
 
     # Lấy thông báo của chính user đang đăng nhập
     @app.route("/api/notifications/me", methods=["GET"])
+    # API lấy danh sách notification của user đang đăng nhập
     def get_my_notifications():
         user_id = _get_user_id_from_request()
 
@@ -73,6 +84,7 @@ def register_notifications_api_routes(app, socketio=None):
 
     # Đếm số thông báo chưa đọc của chính user đang đăng nhập
     @app.route("/api/notifications/me/unread-count", methods=["GET"])
+    # API đếm số notification chưa đọc của user đang đăng nhập
     def get_my_notifications_unread_count():
         user_id = _get_user_id_from_request()
 
@@ -91,6 +103,8 @@ def register_notifications_api_routes(app, socketio=None):
 
     # API lấy notification theo user_id, dùng nội bộ hoặc admin debug
     @app.route("/api/notifications/<user_id>", methods=["GET"])
+    # API lấy notification theo user_id truyền trên URL
+    # Thường dùng cho nội bộ hoặc admin kiểm tra
     def get_notifications(user_id):
         only_unread = _get_bool(request.args.get("unread"))
         limit = _get_limit()
@@ -107,6 +121,7 @@ def register_notifications_api_routes(app, socketio=None):
         }), 200
 
     @app.route("/api/notifications/<user_id>/unread-count", methods=["GET"])
+    # API đếm notification chưa đọc theo user_id truyền trên URL
     def get_notifications_unread_count(user_id):
         unread_count = get_unread_count(user_id)
 
@@ -117,6 +132,8 @@ def register_notifications_api_routes(app, socketio=None):
 
     # Tạo notification thủ công
     @app.route("/api/notifications", methods=["POST"])
+    # API tạo notification thủ công
+    # Có thể dùng để test hoặc dùng cho chức năng nội bộ
     def create_notification_api():
         data = request.get_json(silent=True) or {}
 
@@ -168,6 +185,7 @@ def register_notifications_api_routes(app, socketio=None):
 
     # Đánh dấu 1 notification là đã đọc
     @app.route("/api/notifications/<notification_id>/read", methods=["PATCH"])
+    # API đánh dấu một notification là đã đọc
     def mark_notification_read_api(notification_id):
         data = request.get_json(silent=True) or {}
 
@@ -202,6 +220,7 @@ def register_notifications_api_routes(app, socketio=None):
 
     # Đánh dấu toàn bộ notification của user là đã đọc
     @app.route("/api/notifications/read-all", methods=["PATCH"])
+    # API đánh dấu tất cả notification của một user là đã đọc
     def mark_all_notifications_read_api():
         data = request.get_json(silent=True) or {}
 
@@ -227,6 +246,7 @@ def register_notifications_api_routes(app, socketio=None):
 
     # Xóa notification
     @app.route("/api/notifications/<notification_id>", methods=["DELETE"])
+    # API xóa một notification của user
     def delete_notification_api(notification_id):
         data = request.get_json(silent=True) or {}
 

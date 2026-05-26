@@ -1,14 +1,18 @@
 from datetime import datetime, timezone, timedelta
 
 
+# Timezone Việt Nam, dùng để lưu và hiển thị thời gian cho dễ nhìn
 VN_TZ = timezone(timedelta(hours=7))
 
+# Các role được phép cấu hình quyền trong database
+# ADMIN không nằm trong danh sách này vì ADMIN luôn có toàn quyền
 VALID_PERMISSION_ROLES = ["QUAN_LY", "NHAN_VIEN"]
 
-# ADMIN không cần lưu quyền vì ADMIN luôn được làm tất cả
+# Role ADMIN luôn được làm tất cả, không cần lưu quyền riêng trong database
 ADMIN_ROLE = "ADMIN"
 
-# Các action dùng chung cho nhiều trang
+# Các hành động dùng chung trong hệ thống
+# Mỗi module sẽ chọn một vài action phù hợp trong danh sách này
 VALID_ACTIONS = [
     "view",
     "create",
@@ -18,8 +22,8 @@ VALID_ACTIONS = [
     "approve",
 ]
 
-# Danh sách page/module trong hệ thống
-# Sau này có trang mới thì chỉ cần thêm vào đây
+# Danh sách các trang / module được phép phân quyền
+# Khi có trang mới thì thêm module mới vào đây
 PERMISSION_MODULES = {
     "dashboard": {
         "name": "Dashboard",
@@ -37,18 +41,14 @@ PERMISSION_MODULES = {
     },
 
     # Module tài sản
-    # Bắt buộc phải có vì asset_controller đang dùng:
-    # @permission_required("assets", "view")
-    # @permission_required("assets", "create")
-    # @permission_required("assets", "update")
-    # @permission_required("assets", "delete")
+    # Các controller tài sản sẽ dùng permission_required("assets", "...")
     "assets": {
         "name": "Tài sản",
         "actions": ["view", "create", "update", "delete", "export"]
     },
 
-    # Module cấp phát nếu sau này bạn tách riêng trang cấp phát
-    # Hiện tại assign/unassign trong asset_controller đang dùng quyền assets/update
+    # Module cấp phát tài sản
+    # Dùng khi tách riêng trang cấp phát hoặc duyệt cấp phát
     "assign": {
         "name": "Cấp phát",
         "actions": ["view", "create", "update", "delete", "approve"]
@@ -76,7 +76,8 @@ PERMISSION_MODULES = {
 }
 
 
-# Quyền mặc định nếu role chưa có trong database
+# Quyền mặc định cho từng role nếu trong database chưa có dữ liệu
+# Dữ liệu này giúp hệ thống vẫn chạy được khi chưa cấu hình quyền thủ công
 DEFAULT_ROLE_PERMISSIONS = {
     "QUAN_LY": {
         "dashboard": ["view"],
@@ -84,10 +85,10 @@ DEFAULT_ROLE_PERMISSIONS = {
         # Quản lý được xem danh sách user, nhưng không nhất thiết được xóa user
         "users": ["view"],
 
-        # Quản lý thấy full tài sản và được thao tác tài sản
+        # Quản lý được xem và thao tác nhiều chức năng của tài sản
         "assets": ["view", "create", "update", "delete", "export"],
 
-        # Nếu có trang cấp phát riêng thì dùng module này
+        # Quyền liên quan đến cấp phát tài sản
         "assign": ["view", "create", "update", "approve"],
 
         "employees": ["view", "create", "update", "export"],
@@ -99,9 +100,8 @@ DEFAULT_ROLE_PERMISSIONS = {
     "NHAN_VIEN": {
         "dashboard": ["view"],
 
-        # Quan trọng:
-        # Nhân viên phải có assets/view để vào trang tài sản.
-        # Backend asset_service sẽ tự lọc chỉ thấy tài sản của chính nhân viên đó.
+        # Nhân viên được xem tài sản
+        # Backend sẽ tự lọc để nhân viên chỉ thấy tài sản của chính mình
         "assets": ["view"],
 
         "employees": ["view"],
@@ -110,10 +110,12 @@ DEFAULT_ROLE_PERMISSIONS = {
 }
 
 
+# Lấy thời gian hiện tại theo giờ Việt Nam
 def now_vietnam():
     return datetime.now(VN_TZ)
 
 
+# Chuyển datetime sang chuỗi ngày giờ Việt Nam để trả về frontend
 def format_datetime_vietnam(value):
     if not value:
         return None
@@ -121,6 +123,7 @@ def format_datetime_vietnam(value):
     if isinstance(value, str):
         return value
 
+    # Nếu datetime chưa có timezone thì xem như đang là UTC
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
 
@@ -128,6 +131,7 @@ def format_datetime_vietnam(value):
     return vietnam_time.strftime("%d/%m/%Y %H:%M")
 
 
+# Chuyển document quyền trong database thành dữ liệu JSON dễ dùng
 def permission_serializer(permission):
     return {
         "id": str(permission["_id"]),
@@ -138,6 +142,7 @@ def permission_serializer(permission):
     }
 
 
+# Tạo dữ liệu quyền mới trước khi insert vào database
 def create_permission_model(role, permissions):
     now = now_vietnam()
 
@@ -149,6 +154,7 @@ def create_permission_model(role, permissions):
     }
 
 
+# Tạo dữ liệu cập nhật quyền trước khi update database
 def update_permission_model(permissions):
     return {
         "permissions": permissions or {},
@@ -156,28 +162,20 @@ def update_permission_model(permissions):
     }
 
 
+# Làm sạch dữ liệu quyền trước khi lưu vào database
+# Chỉ giữ module hợp lệ và action hợp lệ, dữ liệu lạ sẽ bị bỏ qua
 def normalize_permissions(permissions):
-    """
-    Làm sạch dữ liệu quyền trước khi lưu DB.
-
-    Input:
-    {
-        "users": ["view", "create"],
-        "reports": ["view", "export"]
-    }
-
-    Output chỉ giữ module/action hợp lệ.
-    """
-
     if not isinstance(permissions, dict):
         return {}
 
     clean_permissions = {}
 
     for module_key, actions in permissions.items():
+        # Bỏ qua module không có trong danh sách cho phép
         if module_key not in PERMISSION_MODULES:
             continue
 
+        # Actions phải là list thì mới xử lý tiếp
         if not isinstance(actions, list):
             continue
 
@@ -186,6 +184,7 @@ def normalize_permissions(permissions):
         clean_actions = []
 
         for action in actions:
+            # Chỉ giữ action hợp lệ và không thêm trùng action
             if action in valid_actions_of_module and action not in clean_actions:
                 clean_actions.append(action)
 
@@ -194,7 +193,9 @@ def normalize_permissions(permissions):
     return clean_permissions
 
 
+# Kiểm tra role, module và action có hợp lệ trong hệ thống hay không
 def is_valid_permission(role, module_key, action):
+    # ADMIN luôn hợp lệ vì ADMIN có toàn quyền
     if role == ADMIN_ROLE:
         return True
 

@@ -17,6 +17,8 @@ from templates.permission.permission_model import (
 )
 
 
+# Tạo index cho field role để mỗi role chỉ có một bản ghi quyền
+# Nếu index đã tồn tại hoặc lỗi nhỏ thì bỏ qua để app vẫn chạy
 def ensure_permission_indexes():
     try:
         permissions_collection.create_index("role", unique=True)
@@ -27,6 +29,8 @@ def ensure_permission_indexes():
 ensure_permission_indexes()
 
 
+# Lấy user hiện tại từ request
+# Ưu tiên lấy từ header X-User-Id, nếu không có thì lấy từ query hoặc body
 def get_current_user_from_request():
     """
     Lấy user hiện tại từ request.
@@ -61,6 +65,8 @@ def get_current_user_from_request():
     return users_collection.find_one({"_id": ObjectId(user_id)})
 
 
+# Lấy danh sách quyền của một role từ database
+# Nếu database chưa có thì dùng quyền mặc định trong model
 def get_role_permissions_from_db(role):
     permission_doc = permissions_collection.find_one({"role": role})
 
@@ -70,6 +76,7 @@ def get_role_permissions_from_db(role):
     return DEFAULT_ROLE_PERMISSIONS.get(role, {})
 
 
+# Kiểm tra một user có quyền thực hiện action trong module hay không
 def user_has_permission(user, module_key, action):
     if not user:
         return False
@@ -91,6 +98,8 @@ def user_has_permission(user, module_key, action):
     return action in module_permissions
 
 
+# Decorator bảo vệ API theo module và action
+# API nào cần quyền thì gắn @permission_required("module", "action")
 def permission_required(module_key, action):
     """
     Decorator dùng để bảo vệ API.
@@ -127,6 +136,7 @@ def permission_required(module_key, action):
     return decorator
 
 
+# Tạo hoặc cập nhật quyền mặc định cho QUAN_LY và NHAN_VIEN
 def seed_default_permissions():
     """
     Tạo quyền mặc định cho QUAN_LY và NHAN_VIEN nếu database chưa có.
@@ -160,6 +170,7 @@ def seed_default_permissions():
     }, 200
 
 
+# Lấy danh sách module, action và role để frontend dựng màn hình phân quyền
 def get_permission_options():
     return {
         "success": True,
@@ -172,6 +183,7 @@ def get_permission_options():
     }, 200
 
 
+# Lấy danh sách quyền của các role có thể cấu hình
 def get_permissions():
     docs = permissions_collection.find({
         "role": {
@@ -200,6 +212,7 @@ def get_permissions():
     }, 200
 
 
+# Lấy quyền của một role cụ thể
 def get_permission_by_role(role):
     if role == ADMIN_ROLE:
         return {
@@ -237,6 +250,7 @@ def get_permission_by_role(role):
     }, 200
 
 
+# Cập nhật quyền cho một role cụ thể
 def update_permission_by_role(role, data):
     if data is None:
         data = {}
@@ -283,6 +297,7 @@ def update_permission_by_role(role, data):
     }, 200
 
 
+# API service kiểm tra quyền theo user_id, module và action
 def check_permission(data):
     if data is None:
         data = {}
@@ -337,6 +352,7 @@ def check_permission(data):
     }, 200
 
 
+# Lấy quyền của user đang đăng nhập
 def get_my_permissions():
     current_user = get_current_user_from_request()
 

@@ -1,3 +1,6 @@
+# File xử lý logic notification
+# Bao gồm lưu notification, gửi realtime qua socket và gửi cho từng nhóm user
+
 from flask_socketio import join_room, leave_room, emit
 
 from templates.notification.notification_model import (
@@ -20,10 +23,14 @@ _socketio = None
 _socket_initialized = False
 
 
+# Tạo tên phòng socket riêng cho từng user
+# Mỗi user sẽ nhận notification trong phòng riêng của mình
 def get_user_notification_room(user_id):
     return f"notifications:user:{str(user_id)}"
 
 
+# Khởi tạo socket notification
+# Hàm này đăng ký các sự kiện realtime như join, leave, mark read
 def init_notification_socket(socketio):
     global _socketio, _socket_initialized
 
@@ -35,6 +42,7 @@ def init_notification_socket(socketio):
     _socket_initialized = True
 
     @socketio.on("join_notifications")
+    # User tham gia phòng notification của chính họ
     def handle_join_notifications(data):
         data = data or {}
         user_id = data.get("user_id")
@@ -55,6 +63,7 @@ def init_notification_socket(socketio):
         })
 
     @socketio.on("leave_notifications")
+    # User rời khỏi phòng notification của chính họ
     def handle_leave_notifications(data):
         data = data or {}
         user_id = data.get("user_id")
@@ -74,6 +83,7 @@ def init_notification_socket(socketio):
         })
 
     @socketio.on("notification:mark_read")
+    # Đánh dấu một notification đã đọc thông qua socket
     def handle_socket_mark_read(data):
         data = data or {}
 
@@ -95,6 +105,7 @@ def init_notification_socket(socketio):
             return
 
     @socketio.on("notifications:mark_all_read")
+    # Đánh dấu toàn bộ notification đã đọc thông qua socket
     def handle_socket_mark_all_read(data):
         data = data or {}
         user_id = data.get("user_id")
@@ -108,6 +119,7 @@ def init_notification_socket(socketio):
         mark_all_notifications_read(user_id)
 
 
+# Gửi một sự kiện realtime tới đúng phòng notification của user
 def emit_to_user(user_id, event_name, payload):
     if not _socketio:
         return
@@ -121,6 +133,7 @@ def emit_to_user(user_id, event_name, payload):
     )
 
 
+# Tạo notification mới và gửi realtime nếu được bật
 def send_notification(
     recipient_user_id,
     title,
@@ -150,6 +163,7 @@ def send_notification(
     return notification
 
 
+# Lấy danh sách notification của một user từ model
 def get_user_notifications(user_id, limit=50, only_unread=False):
     return get_notifications_by_user(
         recipient_user_id=user_id,
@@ -158,10 +172,13 @@ def get_user_notifications(user_id, limit=50, only_unread=False):
     )
 
 
+# Lấy số lượng notification chưa đọc của một user
 def get_unread_count(user_id):
     return count_unread_notifications(user_id)
 
 
+# Đánh dấu một notification là đã đọc
+# Sau đó bắn realtime để frontend cập nhật lại giao diện
 def mark_notification_read(notification_id, user_id=None):
     notification = mark_notification_as_read(
         notification_id=notification_id,
@@ -177,6 +194,8 @@ def mark_notification_read(notification_id, user_id=None):
     return notification
 
 
+# Đánh dấu tất cả notification của user là đã đọc
+# Sau đó báo frontend cập nhật unread_count về 0
 def mark_all_notifications_read(user_id):
     modified_count = mark_all_notifications_as_read(user_id)
 
@@ -189,6 +208,7 @@ def mark_all_notifications_read(user_id):
     return modified_count
 
 
+# Xóa notification và gửi realtime báo frontend xóa khỏi danh sách
 def remove_notification(notification_id, user_id=None):
     deleted = delete_notification(
         notification_id=notification_id,
@@ -204,6 +224,7 @@ def remove_notification(notification_id, user_id=None):
     return deleted
 
 
+# Gửi cùng một notification cho nhiều user
 def send_notification_to_users(
     users,
     title,
@@ -234,6 +255,7 @@ def send_notification_to_users(
     return notifications
 
 
+# Gửi notification cho toàn bộ ADMIN và QUAN_LY
 def notify_admins_and_managers(
     title,
     message,
@@ -253,6 +275,7 @@ def notify_admins_and_managers(
     )
 
 
+# Gửi notification cho toàn bộ ADMIN
 def notify_admins(
     title,
     message,
@@ -272,6 +295,7 @@ def notify_admins(
     )
 
 
+# Gửi notification cho toàn bộ QUAN_LY
 def notify_managers(
     title,
     message,
@@ -291,6 +315,7 @@ def notify_managers(
     )
 
 
+# Thông báo cho ADMIN và QUAN_LY khi nhân viên tạo báo cáo mới
 def notify_staff_report_created(
     staff_user_id,
     staff_name=None,
@@ -319,6 +344,7 @@ def notify_staff_report_created(
     )
 
 
+# Thông báo cho nhân viên khi báo cáo của họ được duyệt
 def notify_report_approved(
     recipient_user_id,
     report_id=None,
@@ -343,6 +369,7 @@ def notify_report_approved(
     )
 
 
+# Thông báo cho nhân viên khi báo cáo của họ bị hủy
 def notify_report_cancelled(
     recipient_user_id,
     report_id=None,
@@ -372,6 +399,7 @@ def notify_report_cancelled(
     )
 
 
+# Thông báo cho nhân viên khi báo cáo của họ bị từ chối
 def notify_report_rejected(
     recipient_user_id,
     report_id=None,
@@ -401,6 +429,7 @@ def notify_report_rejected(
     )
 
 
+# Thông báo cho nhân viên khi họ được cấp phát tài sản
 def notify_staff_asset_assigned(
     recipient_user_id,
     asset_id=None,
@@ -423,6 +452,7 @@ def notify_staff_asset_assigned(
     )
 
 
+# Thông báo cho nhân viên khi tài sản của họ bị thu hồi
 def notify_staff_asset_revoked(
     recipient_user_id,
     asset_id=None,
@@ -443,6 +473,7 @@ def notify_staff_asset_revoked(
         },
         created_by=revoked_by
     )
+# Lấy id của người đang thực hiện hành động
 def _get_actor_id(actor_user):
     if not actor_user:
         return None
@@ -455,6 +486,7 @@ def _get_actor_id(actor_user):
     )
 
 
+# Lấy tên hiển thị của người đang thực hiện hành động
 def _get_actor_name(actor_user):
     if not actor_user:
         return "Người dùng"
@@ -468,6 +500,7 @@ def _get_actor_name(actor_user):
     )
 
 
+# Lấy id tài sản, nếu không có thì dùng asset_code
 def _get_asset_id(asset):
     if not asset:
         return None
@@ -480,6 +513,7 @@ def _get_asset_id(asset):
     )
 
 
+# Lấy tên tài sản để đưa vào nội dung notification
 def _get_asset_name(asset):
     if not asset:
         return "tài sản"
@@ -492,6 +526,7 @@ def _get_asset_name(asset):
     )
 
 
+# Lấy mã tài sản
 def _get_asset_code(asset):
     if not asset:
         return ""
@@ -499,6 +534,7 @@ def _get_asset_code(asset):
     return asset.get("asset_code") or ""
 
 
+# Lấy tên hoặc mã nhân viên của người nhận tài sản
 def _get_asset_receiver(asset):
     if not asset:
         return ""
@@ -511,6 +547,7 @@ def _get_asset_receiver(asset):
     )
 
 
+# Thông báo cho ADMIN và QUAN_LY khi có tài sản mới được tạo
 def notify_asset_created_by_user(actor_user, asset):
     actor_id = _get_actor_id(actor_user)
     actor_name = _get_actor_name(actor_user)
@@ -534,6 +571,7 @@ def notify_asset_created_by_user(actor_user, asset):
     )
 
 
+# Thông báo cho ADMIN và QUAN_LY khi tạo nhiều tài sản cùng lúc
 def notify_assets_bulk_created_by_user(actor_user, inserted_count, assets=None):
     actor_id = _get_actor_id(actor_user)
     actor_name = _get_actor_name(actor_user)
@@ -564,6 +602,7 @@ def notify_assets_bulk_created_by_user(actor_user, inserted_count, assets=None):
     )
 
 
+# Thông báo cho ADMIN và QUAN_LY khi tài sản được cấp phát
 def notify_asset_assigned_by_user(actor_user, asset):
     actor_id = _get_actor_id(actor_user)
     actor_name = _get_actor_name(actor_user)
@@ -591,6 +630,7 @@ def notify_asset_assigned_by_user(actor_user, asset):
     )
 
 
+# Thông báo cho ADMIN và QUAN_LY khi tài sản được thu hồi
 def notify_asset_unassigned_by_user(actor_user, asset, old_receiver=None):
     actor_id = _get_actor_id(actor_user)
     actor_name = _get_actor_name(actor_user)

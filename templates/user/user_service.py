@@ -513,6 +513,10 @@ def get_users_stats():
             "user_status": VALID_STATUS
         }
     }, 200
+
+
+# Lấy danh sách user theo một hoặc nhiều role
+# Chỉ lấy user còn hoạt động để dùng cho notification hoặc phân quyền
 def get_users_by_roles(roles):
     if not isinstance(roles, list):
         roles = [roles]
@@ -525,13 +529,16 @@ def get_users_by_roles(roles):
     return [user_serializer(user) for user in users]
 
 
+# Lấy danh sách ADMIN và QUAN_LY còn hoạt động
 def get_admin_and_manager_users():
     return get_users_by_roles(["ADMIN", "QUAN_LY"])
 
 
+# Lấy danh sách ADMIN còn hoạt động
 def get_admin_users():
     return get_users_by_roles(["ADMIN"])
 
 
+# Lấy danh sách QUAN_LY còn hoạt động
 def get_manager_users():
     return get_users_by_roles(["QUAN_LY"])

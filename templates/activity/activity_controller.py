@@ -1,3 +1,6 @@
+# File: activity_controller.py
+# File này khai báo các API liên quan đến lịch sử hoạt động
+
 from flask import request, jsonify, send_file
 from templates.activity.activity_service import (
     create_activity_log,
@@ -12,13 +15,16 @@ from templates.activity.activity_service import (
 )
 
 
+# Lấy id người dùng hiện tại từ header X-User-Id
 def get_current_user_id_from_header():
     return request.headers.get("X-User-Id")
 
 
+# Đăng ký toàn bộ route API cho màn hình hoạt động
 def register_activity_api_routes(app):
 
     @app.route("/api/activities", methods=["GET"])
+    # API lấy danh sách hoạt động, có phân trang và bộ lọc
     def api_get_activities():
         current_user_id = get_current_user_id_from_header()
 
@@ -33,6 +39,7 @@ def register_activity_api_routes(app):
         return jsonify(response), status_code
 
     @app.route("/api/activities/filter-options", methods=["GET"])
+    # API lấy danh sách lựa chọn cho bộ lọc hoạt động
     def api_get_activity_filter_options():
         current_user_id = get_current_user_id_from_header()
 
@@ -47,6 +54,7 @@ def register_activity_api_routes(app):
         return jsonify(response), status_code
 
     @app.route("/api/activities/stats", methods=["GET"])
+    # API lấy thống kê tổng số hoạt động tạo, sửa, xóa
     def api_get_activity_stats():
         current_user_id = get_current_user_id_from_header()
 
@@ -61,6 +69,7 @@ def register_activity_api_routes(app):
         return jsonify(response), status_code
     
     @app.route("/api/activities/export", methods=["GET"])
+    # API xuất danh sách hoạt động ra file Excel
     def api_export_activities():
         current_user_id = get_current_user_id_from_header()
 
@@ -86,6 +95,7 @@ def register_activity_api_routes(app):
         )
     
     @app.route("/api/activities/<activity_id>", methods=["GET"])
+    # API lấy chi tiết 1 hoạt động theo id
     def api_get_activity_by_id(activity_id):
         current_user_id = get_current_user_id_from_header()
 
@@ -100,6 +110,7 @@ def register_activity_api_routes(app):
         return jsonify(response), status_code
 
     @app.route("/api/activities", methods=["POST"])
+    # API tạo log hoạt động thủ công
     def api_create_activity():
         current_user_id = get_current_user_id_from_header()
 
@@ -126,8 +137,10 @@ def register_activity_api_routes(app):
         return jsonify(response), status_code
 
     @app.after_request
+    # Tự động ghi log sau khi API thay đổi dữ liệu chạy xong
     def auto_log_activity(response):
         try:
+            # Các path này đã tự ghi log riêng nên không ghi thêm lần nữa
             manual_log_paths = [
                 "/api/assets",
                 "/api/assign",
@@ -138,6 +151,7 @@ def register_activity_api_routes(app):
                 if request.path.startswith(path_prefix):
                     return response
 
+            # Chỉ ghi log cho các method có thể làm thay đổi dữ liệu
             if request.method not in ["POST", "PUT", "PATCH", "DELETE"]:
                 return response
 
@@ -150,6 +164,7 @@ def register_activity_api_routes(app):
             if not request.path.startswith("/api/"):
                 return response
 
+            # Nếu API lỗi thì không ghi log thành công
             if response.status_code >= 400:
                 return response
 
@@ -160,6 +175,7 @@ def register_activity_api_routes(app):
 
             data = request.get_json(silent=True) or {}
 
+            # Ưu tiên action frontend gửi lên, nếu không có thì tự tạo action theo method và path
             action = (
                 data.get("activity_action")
                 or data.get("action_log")
@@ -169,6 +185,7 @@ def register_activity_api_routes(app):
 
             module = detect_module_from_path(request.path)
 
+            # Cố gắng lấy id đối tượng bị tác động từ body request
             target_id = (
                 data.get("target_id")
                 or data.get("asset_id")
@@ -177,6 +194,7 @@ def register_activity_api_routes(app):
                 or data.get("report_id")
             )
 
+            # Cố gắng lấy tên đối tượng bị tác động từ body request
             target_name = (
                 data.get("target_name")
                 or data.get("asset_name")

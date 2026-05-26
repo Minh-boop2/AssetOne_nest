@@ -3,10 +3,14 @@ from bson import ObjectId
 from mongo import notifications_collection
 
 
+# Lấy thời gian hiện tại theo UTC để lưu vào database
+# UTC giúp thời gian thống nhất, không bị lệch theo máy người dùng
 def _now():
     return datetime.now(timezone.utc)
 
 
+# Chuyển id dạng chuỗi sang ObjectId của MongoDB
+# Nếu id rỗng hoặc sai định dạng thì trả về None
 def _to_object_id(value):
     if not value:
         return None
@@ -19,6 +23,8 @@ def _to_object_id(value):
     return ObjectId(value)
 
 
+# Chuyển notification từ MongoDB sang dạng dễ trả về cho frontend
+# Đổi _id thành id và đổi datetime thành chuỗi ISO
 def serialize_notification(notification):
     if not notification:
         return None
@@ -37,6 +43,8 @@ def serialize_notification(notification):
     return notification
 
 
+# Tạo một notification mới trong database
+# Mặc định notification mới sẽ là chưa đọc
 def create_notification(
     recipient_user_id,
     title,
@@ -63,6 +71,8 @@ def create_notification(
     return serialize_notification(notification)
 
 
+# Lấy danh sách notification của một user
+# Có thể lấy tất cả hoặc chỉ lấy notification chưa đọc
 def get_notifications_by_user(recipient_user_id, limit=50, only_unread=False):
     query = {
         "recipient_user_id": str(recipient_user_id)
@@ -81,6 +91,7 @@ def get_notifications_by_user(recipient_user_id, limit=50, only_unread=False):
     return [serialize_notification(item) for item in notifications]
 
 
+# Đếm số notification chưa đọc của một user
 def count_unread_notifications(recipient_user_id):
     return notifications_collection.count_documents({
         "recipient_user_id": str(recipient_user_id),
@@ -88,6 +99,8 @@ def count_unread_notifications(recipient_user_id):
     })
 
 
+# Đánh dấu một notification là đã đọc
+# Nếu truyền recipient_user_id thì chỉ user đó mới được đánh dấu notification này
 def mark_notification_as_read(notification_id, recipient_user_id=None):
     object_id = _to_object_id(notification_id)
 
@@ -116,6 +129,8 @@ def mark_notification_as_read(notification_id, recipient_user_id=None):
     return serialize_notification(notification)
 
 
+# Đánh dấu toàn bộ notification chưa đọc của một user thành đã đọc
+# Trả về số lượng notification đã được cập nhật
 def mark_all_notifications_as_read(recipient_user_id):
     result = notifications_collection.update_many(
         {
@@ -133,6 +148,8 @@ def mark_all_notifications_as_read(recipient_user_id):
     return result.modified_count
 
 
+# Xóa một notification theo id
+# Nếu có recipient_user_id thì chỉ xóa notification thuộc về user đó
 def delete_notification(notification_id, recipient_user_id=None):
     object_id = _to_object_id(notification_id)
 

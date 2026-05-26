@@ -1,3 +1,6 @@
+# File: activity_service.py
+# File này xử lý logic chính cho lịch sử hoạt động: lọc, phân quyền, thống kê và xuất Excel
+
 from bson import ObjectId
 from pymongo import DESCENDING
 import unicodedata
@@ -14,11 +17,15 @@ from templates.activity.activity_model import (
 )
 
 
+# Các role này được xem toàn bộ log hoạt động
 ROLES_CAN_VIEW_ALL = ["ADMIN", "QUAN_LY"]
+# Role nhân viên thường, chỉ xem log của chính mình
 ROLE_EMPLOYEE = "NHAN_VIEN"
 
+# Số log hiển thị mặc định trên mỗi trang
 DEFAULT_ACTIVITY_LIMIT = 10
 
+# Các loại hoạt động hiển thị trên bộ lọc
 ACTIVITY_TYPE_OPTIONS = [
     "Báo cáo",
     "Cấp phát",
@@ -32,6 +39,7 @@ ACTIVITY_TYPE_OPTIONS = [
 ]
 
 
+# Tìm người dùng hiện tại theo user_id
 def get_current_user_by_id(user_id):
     if not user_id:
         return None
@@ -42,10 +50,12 @@ def get_current_user_by_id(user_id):
     return users_collection.find_one({"_id": ObjectId(user_id)})
 
 
+# Kiểm tra role có quyền xem tất cả hoạt động hay không
 def can_view_all_activities(role):
     return role in ROLES_CAN_VIEW_ALL
 
 
+# Chuẩn hóa text: viết thường và bỏ dấu tiếng Việt để tìm kiếm dễ hơn
 def normalize_text(value):
     if value is None:
         return ""
@@ -57,6 +67,7 @@ def normalize_text(value):
     return text
 
 
+# Làm sạch metadata trước khi lưu log, ẩn các thông tin nhạy cảm như password/token
 def clean_metadata(data):
     if not isinstance(data, dict):
         return {}
@@ -81,6 +92,7 @@ def clean_metadata(data):
     return cleaned
 
 
+# Tự đoán module từ đường dẫn API, ví dụ /api/assets sẽ ra assets
 def detect_module_from_path(path):
     if not path:
         return "system"
@@ -96,6 +108,7 @@ def detect_module_from_path(path):
     return "system"
 
 
+# Tự tạo nội dung hành động dựa vào method và path
 def build_action_from_request(method, path):
     module = detect_module_from_path(path)
     method = method.upper()
@@ -125,6 +138,7 @@ def build_action_from_request(method, path):
     return f"Thao tác với dữ liệu {module_name}"
 
 
+# Tạo 1 log hoạt động mới và lưu vào database
 def create_activity_log(
     user_id,
     action,
@@ -136,6 +150,7 @@ def create_activity_log(
     target_name=None,
     metadata=None,
 ):
+    # Lấy thông tin user để gắn vào log
     current_user = get_current_user_by_id(user_id)
 
     if not current_user:
@@ -150,6 +165,7 @@ def create_activity_log(
             "message": "Thiếu nội dung hoạt động"
         }, 400
 
+    # Gom thông tin user và hành động thành dữ liệu log
     activity_data = {
         "user_id": current_user["_id"],
         "employee_code": current_user.get("employee_code"),
@@ -171,6 +187,7 @@ def create_activity_log(
 
     activity = create_activity_model(activity_data)
 
+    # Lưu log vào collection activities
     result = activities_collection.insert_one(activity)
 
     created_activity = activities_collection.find_one({"_id": result.inserted_id})
@@ -182,6 +199,7 @@ def create_activity_log(
     }, 201
 
 
+# Tạo điều kiện tìm kiếm regex cho nhiều field và nhiều từ khóa
 def make_regex_condition(fields, patterns):
     conditions = []
 
@@ -202,6 +220,7 @@ def make_regex_condition(fields, patterns):
     }
 
 
+# Tạo điều kiện lọc theo loại hoạt động như Báo cáo, Cấp phát, Thu hồi...
 def build_activity_type_condition(activity_type):
     if not activity_type or activity_type == "Tất cả":
         return {}
@@ -325,6 +344,7 @@ def build_activity_type_condition(activity_type):
     return make_regex_condition(general_fields, [activity_type])
 
 
+# Gộp 2 query MongoDB lại với nhau bằng $and khi cần
 def merge_query(base_query, extra_condition):
     if not extra_condition:
         return base_query
@@ -340,6 +360,7 @@ def merge_query(base_query, extra_condition):
     }
 
 
+# Tạo query phân quyền: admin/quản lý xem được nhiều, nhân viên chỉ xem của mình
 def build_permission_query(current_user, args):
     query = {}
     current_role = current_user.get("role")
@@ -348,6 +369,7 @@ def build_permission_query(current_user, args):
     role = args.get("role")
     employee_code = args.get("employee_code")
 
+    # Admin/quản lý được lọc theo user, role, mã nhân viên
     if can_view_all_activities(current_role):
         if user_id:
             if not is_valid_object_id(user_id):
@@ -365,11 +387,13 @@ def build_permission_query(current_user, args):
             query["employee_code"] = employee_code
 
     else:
+        # Nhân viên thường chỉ xem log của chính mình
         query["user_id"] = current_user["_id"]
 
     return query, None, None
 
 
+# Tạo query chính để lọc danh sách hoạt động từ request args
 def build_activity_query(args, current_user):
     permission_query, error_response, error_status = build_permission_query(current_user, args)
 
@@ -378,12 +402,14 @@ def build_activity_query(args, current_user):
 
     query = dict(permission_query)
 
+    # Lấy keyword tìm kiếm, hỗ trợ nhiều tên param khác nhau
     keyword = (
         args.get("keyword")
         or args.get("search")
         or args.get("q")
     )
 
+    # Lấy loại hoạt động cần lọc
     activity_type = (
         args.get("type")
         or args.get("activity_type")
@@ -452,6 +478,7 @@ def build_activity_query(args, current_user):
     return query, None, None
 
 
+# Lấy danh sách hoạt động có phân trang và bộ lọc
 def get_activities(args, current_user_id):
     current_user = get_current_user_by_id(current_user_id)
 
@@ -477,8 +504,10 @@ def get_activities(args, current_user_id):
     if error_response:
         return error_response, error_status
 
+    # Đếm tổng số log khớp điều kiện
     total = activities_collection.count_documents(query)
 
+    # Lấy danh sách log mới nhất trước
     activities = (
         activities_collection
         .find(query)
@@ -526,6 +555,7 @@ def get_activities(args, current_user_id):
     }, 200
 
 
+# Lấy dữ liệu cho bộ lọc: loại hoạt động và danh sách người dùng
 def get_activity_filter_options(current_user_id):
     current_user = get_current_user_by_id(current_user_id)
 
@@ -556,6 +586,7 @@ def get_activity_filter_options(current_user_id):
             "count": count,
         })
 
+    # Gom nhóm log theo người dùng để tạo option lọc theo người thực hiện
     user_pipeline = [
         {
             "$match": permission_query
@@ -622,6 +653,7 @@ def get_activity_filter_options(current_user_id):
     }, 200
 
 
+# Lấy chi tiết 1 log hoạt động theo id
 def get_activity_by_id(activity_id, current_user_id):
     current_user = get_current_user_by_id(current_user_id)
 
@@ -661,6 +693,7 @@ def get_activity_by_id(activity_id, current_user_id):
     }, 200
 
 
+# Lấy thống kê số lượng log tạo mới, cập nhật, xóa
 def get_activity_stats(current_user_id):
     current_user = get_current_user_by_id(current_user_id)
 
@@ -704,6 +737,7 @@ def get_activity_stats(current_user_id):
             "delete_count": delete_count,
         }
     }, 200
+# Xác định loại hoạt động khi xuất Excel
 def detect_activity_export_type(activity):
     module = str(activity.get("module") or "").lower()
     action = str(activity.get("action") or "").lower()
@@ -739,6 +773,7 @@ def detect_activity_export_type(activity):
     return "Hệ thống"
 
 
+# Format thời gian cho file Excel xuất ra
 def format_activity_export_time(value):
     if not value:
         return ""
@@ -771,6 +806,7 @@ def format_activity_export_time(value):
     return text
 
 
+# Tạo mô tả dễ đọc cho từng dòng trong file Excel
 def build_activity_export_description(activity):
     action = activity.get("action") or ""
     target_name = activity.get("target_name") or ""
@@ -785,6 +821,7 @@ def build_activity_export_description(activity):
     return action or "Không có mô tả"
 
 
+# Xuất danh sách hoạt động ra file Excel
 def get_activities_export(args, current_user_id):
     current_user = get_current_user_by_id(current_user_id)
 
@@ -806,10 +843,12 @@ def get_activities_export(args, current_user_id):
         .limit(10000)
     )
 
+    # Tạo workbook Excel mới
     wb = Workbook()
     ws = wb.active
     ws.title = "Hoạt động"
 
+    # Các cột trong file Excel
     headers = [
         "Người thực hiện",
         "Hành động",
@@ -837,6 +876,7 @@ def get_activities_export(args, current_user_id):
 
     row_index = 2
 
+    # Ghi từng log hoạt động vào từng dòng Excel
     for activity in activities:
         full_name = (
             activity.get("full_name")
@@ -876,6 +916,7 @@ def get_activities_export(args, current_user_id):
     for row in ws.iter_rows(min_row=2):
         ws.row_dimensions[row[0].row].height = 22
 
+    # Lưu workbook vào bộ nhớ để gửi file về client
     output = BytesIO()
     wb.save(output)
     output.seek(0)

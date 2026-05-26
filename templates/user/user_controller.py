@@ -13,6 +13,7 @@ from templates.user.user_service import (
 from templates.permission.permission_service import permission_required
 
 
+# Đăng ký toàn bộ API liên quan tới user vào app Flask
 def register_users_api_routes(app):
 
     # API đăng nhập user

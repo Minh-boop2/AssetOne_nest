@@ -1,3 +1,4 @@
+# Controller report: nhận request từ API báo cáo, gọi service xử lý rồi trả JSON về frontend
 from flask import request, jsonify, send_from_directory
 
 from templates.report.report_model import UPLOAD_FOLDER
@@ -31,6 +32,7 @@ from templates.permission.permission_service import (
 from templates.activity.activity_service import create_activity_log
 
 
+# Lấy dữ liệu gửi lên từ form hoặc JSON
 def _get_request_data():
     if request.form:
         return request.form.to_dict(flat=True)
@@ -38,6 +40,7 @@ def _get_request_data():
     return request.get_json(silent=True) or {}
 
 
+# Lấy tất cả file người dùng upload trong request
 def _get_uploaded_files():
     uploaded_files = []
 
@@ -51,6 +54,7 @@ def _get_uploaded_files():
     ]
 
 
+# Lấy id của user hiện tại, nếu không có thì trả chuỗi rỗng
 def _get_current_user_id(current_user):
     if not current_user:
         return ""
@@ -58,6 +62,7 @@ def _get_current_user_id(current_user):
     return str(current_user.get("_id") or current_user.get("id") or "")
 
 
+# Lấy role của user hiện tại
 def _get_current_user_role(current_user):
     if not current_user:
         return ""
@@ -65,6 +70,7 @@ def _get_current_user_role(current_user):
     return current_user.get("role") or ""
 
 
+# Lấy tên báo cáo để hiển thị trong log hoặc notification
 def _get_report_title(report):
     if not report:
         return "báo cáo"
@@ -78,6 +84,7 @@ def _get_report_title(report):
     )
 
 
+# Lấy mã báo cáo
 def _get_report_code(report):
     if not report:
         return ""
@@ -85,6 +92,7 @@ def _get_report_code(report):
     return report.get("report_code") or ""
 
 
+# Lấy loại báo cáo
 def _get_report_type(report):
     if not report:
         return ""
@@ -92,6 +100,7 @@ def _get_report_type(report):
     return report.get("report_type") or report.get("type") or ""
 
 
+# Lấy trạng thái báo cáo
 def _get_report_status(report):
     if not report:
         return ""
@@ -99,6 +108,7 @@ def _get_report_status(report):
     return report.get("status") or ""
 
 
+# Lấy tên tài sản trong báo cáo
 def _get_report_asset_name(report):
     if not report:
         return ""
@@ -111,6 +121,7 @@ def _get_report_asset_name(report):
     )
 
 
+# Lấy id báo cáo, ưu tiên id rồi mới tới mã báo cáo
 def _get_report_id(report):
     if not report:
         return ""
@@ -118,6 +129,7 @@ def _get_report_id(report):
     return report.get("id") or report.get("_id") or report.get("report_code") or ""
 
 
+# Lấy phần data của response nếu data là object
 def _get_response_report_data(response):
     if not isinstance(response, dict):
         return {}
@@ -130,6 +142,7 @@ def _get_response_report_data(response):
     return {}
 
 
+# Gom thông tin báo cáo thành metadata để ghi log hoạt động
 def _build_report_metadata(report):
     if not report:
         return {}
@@ -170,6 +183,8 @@ def _build_report_metadata(report):
     }
 
 
+# Ghi log thao tác liên quan tới báo cáo
+# Nếu lỗi ghi log thì bỏ qua để API chính không bị hỏng
 def _log_report_activity(
     current_user,
     action,
@@ -202,6 +217,7 @@ def _log_report_activity(
         pass
 
 
+# Lấy dữ liệu báo cáo trước khi cập nhật, duyệt, hủy hoặc xóa file
 def _get_report_before_action(report_id, current_user):
     try:
         response, status_code = get_report_by_id(
@@ -218,6 +234,7 @@ def _get_report_before_action(report_id, current_user):
         return {}
 
 
+# Tạo câu mô tả log khi user tạo báo cáo
 def _build_create_report_action(report):
     report_type = _get_report_type(report)
     asset_name = _get_report_asset_name(report)
@@ -232,11 +249,13 @@ def _build_create_report_action(report):
     return f"Tạo báo cáo {report_title}"
 
 
+# Tạo câu mô tả log khi user cập nhật báo cáo
 def _build_update_report_action(report):
     report_title = _get_report_title(report)
     return f"Cập nhật báo cáo {report_title}"
 
 
+# Tạo câu mô tả log khi user duyệt báo cáo
 def _build_approve_report_action(report):
     report_type = _get_report_type(report)
     asset_name = _get_report_asset_name(report)
@@ -251,21 +270,25 @@ def _build_approve_report_action(report):
     return f"Duyệt báo cáo {report_title}"
 
 
+# Tạo câu mô tả log khi user hủy báo cáo
 def _build_cancel_report_action(report):
     report_title = _get_report_title(report)
     return f"Hủy báo cáo {report_title}"
 
 
+# Tạo câu mô tả log khi user xóa báo cáo
 def _build_delete_report_action(report):
     report_title = _get_report_title(report)
     return f"Xóa báo cáo {report_title}"
 
 
+# Tạo câu mô tả log khi user xóa file trong báo cáo
 def _build_delete_report_file_action(report, file_id):
     report_title = _get_report_title(report)
     return f"Xóa file trong báo cáo {report_title}"
 
 
+# Sau khi nhân viên tạo báo cáo thì gửi thông báo cho admin và quản lý
 def _notify_after_create_report(current_user, report):
     try:
         if _get_current_user_role(current_user) != "NHAN_VIEN":
@@ -285,6 +308,7 @@ def _notify_after_create_report(current_user, report):
         pass
 
 
+# Sau khi duyệt báo cáo thì thông báo cho người gửi báo cáo
 def _notify_after_approve_report(current_user, approved_report, response, data, report_id):
     try:
         reporter_user_id = approved_report.get("reporter_user_id")
@@ -329,6 +353,7 @@ def _notify_after_approve_report(current_user, approved_report, response, data, 
         pass
 
 
+# Sau khi hủy báo cáo thì thông báo cho người gửi báo cáo
 def _notify_after_cancel_report(current_user, cancelled_report, data, report_id):
     try:
         reporter_user_id = cancelled_report.get("reporter_user_id")
@@ -349,8 +374,10 @@ def _notify_after_cancel_report(current_user, cancelled_report, data, report_id)
         pass
 
 
+# Đăng ký toàn bộ API route cho module báo cáo
 def register_reports_api_routes(app):
 
+    # API lấy các lựa chọn cố định của báo cáo như loại, trạng thái, file cho phép
     @app.route("/api/reports/options", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_report_options():
@@ -358,6 +385,7 @@ def register_reports_api_routes(app):
         response, status_code = get_report_options(current_user=current_user)
         return jsonify(response), status_code
 
+    # API lấy danh sách tài sản mà user hiện tại có thể chọn khi tạo báo cáo
     @app.route("/api/reports/assets/options", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_my_report_asset_options():
@@ -365,6 +393,7 @@ def register_reports_api_routes(app):
         response, status_code = get_my_report_asset_options(current_user=current_user)
         return jsonify(response), status_code
 
+    # API lấy thống kê tổng quan báo cáo
     @app.route("/api/reports/overview", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_report_overview():
@@ -372,6 +401,7 @@ def register_reports_api_routes(app):
         response, status_code = get_report_overview(current_user=current_user)
         return jsonify(response), status_code
 
+    # API lấy danh sách báo cáo, có lọc và phân trang
     @app.route("/api/reports", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_reports():
@@ -386,6 +416,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API lấy chi tiết một báo cáo theo id hoặc mã báo cáo
     @app.route("/api/reports/<report_id>", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_report_by_id(report_id):
@@ -398,6 +429,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API tạo báo cáo mới, có thể gửi kèm file đính kèm
     @app.route("/api/reports", methods=["POST"])
     def api_create_report():
         current_user = get_current_user_from_request()
@@ -434,6 +466,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API cập nhật báo cáo, có thể sửa thông tin hoặc thêm file
     @app.route("/api/reports/<report_id>", methods=["PUT", "PATCH"])
     @permission_required("reports", "update")
     def api_update_report(report_id):
@@ -474,6 +507,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API duyệt báo cáo và xử lý tài sản liên quan nếu cần
     @app.route("/api/reports/<report_id>/approve", methods=["POST", "PATCH"])
     @permission_required("reports", "update")
     def api_approve_report(report_id):
@@ -520,6 +554,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API hủy báo cáo và lưu lý do hủy
     @app.route("/api/reports/<report_id>/cancel", methods=["POST", "PATCH"])
     @permission_required("reports", "update")
     def api_cancel_report(report_id):
@@ -564,6 +599,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API xóa báo cáo
     @app.route("/api/reports/<report_id>", methods=["DELETE"])
     def api_delete_report(report_id):
         current_user = get_current_user_from_request()
@@ -589,6 +625,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API xóa một file trong báo cáo
     @app.route("/api/reports/<report_id>/files/<file_id>", methods=["DELETE"])
     @permission_required("reports", "update")
     def api_delete_report_file(report_id, file_id):
@@ -625,6 +662,7 @@ def register_reports_api_routes(app):
 
         return jsonify(response), status_code
 
+    # API mở hoặc tải file đã upload của báo cáo
     @app.route("/api/reports/files/<path:filename>", methods=["GET"])
     @permission_required("reports", "view")
     def api_get_report_file(filename):

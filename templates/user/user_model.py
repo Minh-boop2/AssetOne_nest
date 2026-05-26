@@ -100,6 +100,7 @@ def update_user_model(data):
         if field in data:
             update_data[field] = data[field]
 
+    # Mỗi lần cập nhật thì ghi lại thời gian sửa cuối cùng
     update_data["updated_at"] = now_vietnam()
 
     return update_data

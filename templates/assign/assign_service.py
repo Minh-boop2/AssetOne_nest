@@ -3,6 +3,8 @@ import re
 from datetime import datetime
 from bson import ObjectId
 
+# Import các hàm làm việc trực tiếp với collection tài sản.
+# Module assign đang dùng dữ liệu trong assets_collection.
 from .assign_model import (
     count_assign_assets,
     find_assign_assets,
@@ -13,6 +15,7 @@ from .assign_model import (
 )
 
 
+# Các field được phép tìm kiếm trong danh sách cấp phát.
 SEARCH_FIELDS = [
     "asset_name",
     "asset",
@@ -32,6 +35,7 @@ SEARCH_FIELDS = [
 ]
 
 
+# Các giá trị status trong database được hiểu là đang sử dụng.
 USING_STATUS_VALUES = [
     "using",
     "Đang sử dụng",
@@ -39,6 +43,7 @@ USING_STATUS_VALUES = [
     "Hoàn thành",
 ]
 
+# Các giá trị status trong database được hiểu là chưa dùng.
 UNUSED_STATUS_VALUES = [
     "available",
     "Chưa sử dụng",
@@ -46,12 +51,15 @@ UNUSED_STATUS_VALUES = [
     "Chưa dùng",
 ]
 
+# Những role được xem toàn bộ danh sách cấp phát.
 FULL_ASSIGN_ROLES = [
     "ADMIN",
     "QUAN_LY",
 ]
 
 
+# Chuyển datetime thành chuỗi ISO để trả về JSON dễ dùng.
+# Nếu không phải datetime thì giữ nguyên giá trị cũ.
 def serialize_datetime(value):
     if not value:
         return ""
@@ -62,6 +70,8 @@ def serialize_datetime(value):
     return value
 
 
+# Lấy id của user hiện tại.
+# Hỗ trợ nhiều key khác nhau để tránh lệch dữ liệu giữa các module.
 def get_current_user_id(current_user):
     if not current_user:
         return ""
@@ -74,6 +84,7 @@ def get_current_user_id(current_user):
     )
 
 
+# Kiểm tra user hiện tại có được xem tất cả bản ghi cấp phát không.
 def user_can_view_all_assigns(current_user):
     if not current_user:
         return False
@@ -81,6 +92,8 @@ def user_can_view_all_assigns(current_user):
     return current_user.get("role") in FULL_ASSIGN_ROLES
 
 
+# Gộp nhiều query MongoDB lại với nhau.
+# Nếu có nhiều query thì dùng $and để tất cả điều kiện đều phải đúng.
 def merge_assign_queries(*queries):
     clean_queries = []
 
@@ -99,6 +112,9 @@ def merge_assign_queries(*queries):
     }
 
 
+# Tạo điều kiện giới hạn dữ liệu theo quyền xem của user.
+# ADMIN / QUAN_LY được xem hết.
+# NHAN_VIEN chỉ xem tài sản cấp phát cho chính mình.
 def build_assign_visibility_query(current_user=None):
     if not current_user:
         return {}
@@ -121,6 +137,7 @@ def build_assign_visibility_query(current_user=None):
             "employee_code": employee_code
         })
 
+    # Nếu không có thông tin user để lọc thì trả query không ra dữ liệu nào.
     if not owner_conditions:
         return {
             "_id": {
@@ -133,6 +150,8 @@ def build_assign_visibility_query(current_user=None):
     }
 
 
+# Đổi status thật trong tài sản sang status hiển thị ở màn cấp phát.
+# Ví dụ: using => Đang sử dụng, available => Chưa dùng.
 def map_asset_status_to_assign_status(status):
     status = (status or "").strip()
 
@@ -145,6 +164,8 @@ def map_asset_status_to_assign_status(status):
     return None
 
 
+# Đổi status người dùng chọn trên màn hình thành danh sách status trong database.
+# Dùng để filter chính xác dù database có nhiều cách lưu status khác nhau.
 def map_assign_status_to_asset_status_values(status):
     status = (status or "").strip()
 
@@ -160,6 +181,8 @@ def map_assign_status_to_asset_status_values(status):
     return []
 
 
+# Chuẩn hóa dữ liệu tài sản thành dữ liệu cấp phát để trả về frontend.
+# Vì assign đang lấy từ assets_collection nên cần đổi tên field cho dễ dùng.
 def normalize_assign_from_asset(item):
     row = dict(item)
 
@@ -216,6 +239,8 @@ def normalize_assign_from_asset(item):
     }
 
 
+# Tạo query tìm bản ghi theo id.
+# Có thể tìm bằng _id MongoDB, asset_code hoặc id cũ nếu có.
 def build_id_query(asset_id):
     queries = [
         {
@@ -236,6 +261,8 @@ def build_id_query(asset_id):
     }
 
 
+# Tạo query lọc danh sách cấp phát.
+# Hỗ trợ tìm kiếm, loại tài sản, phòng ban, trạng thái và vị trí.
 def build_assign_query(
     search="",
     asset_type="Tất cả",
@@ -245,8 +272,10 @@ def build_assign_query(
 ):
     conditions = []
 
+    # Chuyển status hiển thị sang status thật trong database.
     allowed_status_values = map_assign_status_to_asset_status_values(status)
 
+    # Nếu status không hợp lệ thì trả query không có kết quả.
     if not allowed_status_values:
         return {
             "_id": {
@@ -260,6 +289,7 @@ def build_assign_query(
         }
     })
 
+    # Tìm kiếm nhiều field bằng regex, không phân biệt hoa thường.
     if search:
         safe_search = re.escape(search.strip())
 
@@ -305,6 +335,8 @@ def build_assign_query(
     }
 
 
+# Tạo query đếm theo một nhóm status.
+# Có thể gộp thêm visibility_query để đếm đúng theo quyền user.
 def build_status_count_query(status_values, visibility_query=None):
     return merge_assign_queries(
         {
@@ -316,6 +348,8 @@ def build_status_count_query(status_values, visibility_query=None):
     )
 
 
+# Lấy số lượng cho các bộ lọc ở màn danh sách cấp phát.
+# Bao gồm loại tài sản, phòng ban, vị trí và trạng thái.
 def get_assign_filter_counts(current_user=None):
     visibility_query = build_assign_visibility_query(current_user)
 
@@ -358,6 +392,7 @@ def get_assign_filter_counts(current_user=None):
         ),
     }
 
+    # Duyệt từng bản ghi để cộng số lượng theo type, department và location.
     for item in find_assign_assets_for_counts(base_query):
         asset_type = item.get("type") or item.get("category")
         department = item.get("department")
@@ -380,6 +415,8 @@ def get_assign_filter_counts(current_user=None):
     }
 
 
+# Lấy danh sách cấp phát có phân trang và bộ lọc.
+# Đây là hàm chính cho API GET /api/assign.
 def list_assigns(
     page=1,
     per_page=10,
@@ -400,6 +437,7 @@ def list_assigns(
     except Exception:
         per_page = 10
 
+    # Chặn page nhỏ hơn 1 và giới hạn per_page tối đa 100.
     page = max(1, page)
     per_page = max(1, min(per_page, 100))
 
@@ -436,6 +474,7 @@ def list_assigns(
 
     items = []
 
+    # Chuẩn hóa từng bản ghi trước khi trả về frontend.
     for item in raw_items:
         row = normalize_assign_from_asset(item)
 
@@ -460,6 +499,8 @@ def list_assigns(
     }
 
 
+# Tìm chi tiết một bản ghi cấp phát theo id.
+# Có áp dụng quyền xem theo user hiện tại.
 def find_assign(assign_id, current_user=None):
     id_query = build_id_query(assign_id)
     visibility_query = build_assign_visibility_query(current_user)
@@ -476,12 +517,15 @@ def find_assign(assign_id, current_user=None):
 
     row = normalize_assign_from_asset(item)
 
+    # Chỉ trả về những status thuộc màn cấp phát.
     if row["status"] not in ["Đang sử dụng", "Chưa dùng"]:
         return None
 
     return row
 
 
+# Xóa một bản ghi cấp phát theo id.
+# Có áp dụng quyền xem theo user hiện tại.
 def delete_assign(assign_id, current_user=None):
     id_query = build_id_query(assign_id)
     visibility_query = build_assign_visibility_query(current_user)
@@ -499,6 +543,9 @@ def delete_assign(assign_id, current_user=None):
     }
 
 
+# Tạo dữ liệu update tương ứng với trạng thái cấp phát mới.
+# Đang sử dụng => status trong database là using.
+# Chưa dùng => xóa thông tin người nhận và chuyển status về available.
 def build_update_data_for_assign_status(assign_status):
     assign_status = (assign_status or "").strip()
     now = datetime.utcnow()
@@ -526,6 +573,8 @@ def build_update_data_for_assign_status(assign_status):
     return None
 
 
+# Cập nhật trạng thái cấp phát theo id.
+# Hàm này dùng chung cho approve, reject và update status thủ công.
 def update_assign_status_by_id(assign_id, assign_status, current_user=None):
     update_data = build_update_data_for_assign_status(assign_status)
 
@@ -576,6 +625,8 @@ def update_assign_status_by_id(assign_id, assign_status, current_user=None):
     }
 
 
+# Duyệt cấp phát tài sản.
+# Thực chất là cập nhật status sang Đang sử dụng.
 def approve_assign(assign_id, current_user=None):
     return update_assign_status_by_id(
         assign_id=assign_id,
@@ -584,6 +635,8 @@ def approve_assign(assign_id, current_user=None):
     )
 
 
+# Từ chối hoặc hủy cấp phát tài sản.
+# Thực chất là cập nhật status sang Chưa dùng.
 def reject_assign(assign_id, current_user=None):
     return update_assign_status_by_id(
         assign_id=assign_id,
@@ -592,6 +645,7 @@ def reject_assign(assign_id, current_user=None):
     )
 
 
+# Cập nhật trạng thái cấp phát theo status truyền từ frontend.
 def update_assign_status(assign_id, status, current_user=None):
     return update_assign_status_by_id(
         assign_id=assign_id,
