@@ -6,3 +6,4 @@ requests
 openpyxl
 flask-socketio
 eventlet
+tzdata

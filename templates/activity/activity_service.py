@@ -1,11 +1,18 @@
 # File: activity_service.py
-# File này xử lý logic chính cho lịch sử hoạt động: lọc, phân quyền, thống kê và xuất Excel
+# File này xử lý logic chính cho lịch sử hoạt động:
+# - Tạo log hoạt động
+# - Lọc danh sách hoạt động
+# - Phân quyền xem log
+# - Thống kê hoạt động
+# - Xuất Excel
+# - Lọc theo thời gian tạo hoạt động
 
 from bson import ObjectId
 from pymongo import DESCENDING
 import unicodedata
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta, time, timezone
+from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from mongo import activities_collection, users_collection
@@ -17,8 +24,13 @@ from templates.activity.activity_model import (
 )
 
 
+# Múi giờ dùng cho giao diện Việt Nam
+APP_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
 # Các role này được xem toàn bộ log hoạt động
 ROLES_CAN_VIEW_ALL = ["ADMIN", "QUAN_LY"]
+
 # Role nhân viên thường, chỉ xem log của chính mình
 ROLE_EMPLOYEE = "NHAN_VIEN"
 
@@ -65,6 +77,226 @@ def normalize_text(value):
     text = "".join(char for char in text if unicodedata.category(char) != "Mn")
 
     return text
+
+
+# Lấy giá trị đầu tiên có tồn tại trong request args
+# Dùng để hỗ trợ nhiều tên input khác nhau từ giao diện
+def get_first_arg_value(args, *keys):
+    for key in keys:
+        value = args.get(key)
+
+        if value not in [None, ""]:
+            return value
+
+    return ""
+
+
+# Parse chuỗi ngày tháng từ giao diện thành datetime của Python
+# Người dùng chọn ngày theo giờ Việt Nam
+def parse_activity_datetime(value, is_end_of_day=False):
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value).strip()
+
+    if not text or text == "Tất cả":
+        return None
+
+    clean_text = (
+        text
+        .replace("Z", "")
+        .replace("+00:00", "")
+        .strip()
+    )
+
+    date_only_formats = [
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+    ]
+
+    datetime_formats = [
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+    ]
+
+    for fmt in date_only_formats:
+        try:
+            parsed_date = datetime.strptime(clean_text, fmt).date()
+
+            if is_end_of_day:
+                return datetime.combine(parsed_date, time.max)
+
+            return datetime.combine(parsed_date, time.min)
+        except Exception:
+            pass
+
+    for fmt in datetime_formats:
+        try:
+            return datetime.strptime(clean_text[:26], fmt)
+        except Exception:
+            pass
+
+    return None
+
+
+# Chuyển datetime giờ Việt Nam sang UTC naive để query MongoDB
+# MongoDB/PyMongo thường lưu datetime ở UTC dạng không có tzinfo
+def convert_vietnam_time_to_utc_naive(value):
+    if not value:
+        return None
+
+    if value.tzinfo is None:
+        local_value = value.replace(tzinfo=APP_TIMEZONE)
+    else:
+        local_value = value.astimezone(APP_TIMEZONE)
+
+    utc_value = local_value.astimezone(timezone.utc)
+
+    return utc_value.replace(tzinfo=None)
+
+
+# Chuyển datetime UTC từ database sang giờ Việt Nam để xuất Excel
+def convert_utc_to_vietnam_time(value):
+    if not value:
+        return None
+
+    if value.tzinfo is None:
+        utc_value = value.replace(tzinfo=timezone.utc)
+    else:
+        utc_value = value.astimezone(timezone.utc)
+
+    return utc_value.astimezone(APP_TIMEZONE)
+
+
+# Tạo khoảng thời gian nhanh theo lựa chọn từ giao diện
+def build_relative_time_range(time_filter):
+    if not time_filter or time_filter == "Tất cả":
+        return None, None
+
+    normalized = normalize_text(time_filter)
+    normalized = normalized.replace("_", " ").replace("-", " ")
+
+    now = datetime.now(APP_TIMEZONE)
+    today = now.date()
+
+    today_start = datetime.combine(today, time.min)
+    today_end = datetime.combine(today, time.max)
+
+    if normalized in ["today", "hom nay"]:
+        return today_start, today_end
+
+    if normalized in ["yesterday", "hom qua"]:
+        yesterday = today - timedelta(days=1)
+
+        return (
+            datetime.combine(yesterday, time.min),
+            datetime.combine(yesterday, time.max),
+        )
+
+    if normalized in ["last 7 days", "7 days", "7 ngay", "7 ngay qua"]:
+        start_date = today - timedelta(days=6)
+
+        return (
+            datetime.combine(start_date, time.min),
+            today_end,
+        )
+
+    if normalized in ["last 30 days", "30 days", "30 ngay", "30 ngay qua"]:
+        start_date = today - timedelta(days=29)
+
+        return (
+            datetime.combine(start_date, time.min),
+            today_end,
+        )
+
+    if normalized in ["this week", "tuan nay"]:
+        start_date = today - timedelta(days=now.weekday())
+
+        return (
+            datetime.combine(start_date, time.min),
+            today_end,
+        )
+
+    if normalized in ["this month", "thang nay"]:
+        start_date = today.replace(day=1)
+
+        return (
+            datetime.combine(start_date, time.min),
+            today_end,
+        )
+
+    return None, None
+
+
+# Tạo điều kiện lọc thời gian cho MongoDB
+# Người dùng chọn ngày theo giờ Việt Nam
+# Trước khi query MongoDB sẽ đổi sang UTC
+def build_activity_time_condition(args):
+    start_value = get_first_arg_value(
+        args,
+        "start_date",
+        "date_from",
+        "from_date",
+        "tu_ngay",
+    )
+
+    end_value = get_first_arg_value(
+        args,
+        "end_date",
+        "date_to",
+        "to_date",
+        "den_ngay",
+    )
+
+    time_filter = get_first_arg_value(
+        args,
+        "time_filter",
+        "time_range",
+        "date_range",
+    )
+
+    start_date_local = parse_activity_datetime(
+        start_value,
+        is_end_of_day=False,
+    )
+
+    end_date_local = parse_activity_datetime(
+        end_value,
+        is_end_of_day=True,
+    )
+
+    if not start_date_local and not end_date_local and time_filter:
+        start_date_local, end_date_local = build_relative_time_range(time_filter)
+
+    if start_date_local and end_date_local and start_date_local > end_date_local:
+        start_date_local, end_date_local = end_date_local, start_date_local
+
+    created_at_condition = {}
+
+    if start_date_local:
+        created_at_condition["$gte"] = convert_vietnam_time_to_utc_naive(
+            start_date_local
+        )
+
+    if end_date_local:
+        created_at_condition["$lte"] = convert_vietnam_time_to_utc_naive(
+            end_date_local
+        )
+
+    if not created_at_condition:
+        return {}
+
+    return {
+        "created_at": created_at_condition
+    }
 
 
 # Làm sạch metadata trước khi lưu log, ẩn các thông tin nhạy cảm như password/token
@@ -150,7 +382,6 @@ def create_activity_log(
     target_name=None,
     metadata=None,
 ):
-    # Lấy thông tin user để gắn vào log
     current_user = get_current_user_by_id(user_id)
 
     if not current_user:
@@ -165,7 +396,6 @@ def create_activity_log(
             "message": "Thiếu nội dung hoạt động"
         }, 400
 
-    # Gom thông tin user và hành động thành dữ liệu log
     activity_data = {
         "user_id": current_user["_id"],
         "employee_code": current_user.get("employee_code"),
@@ -187,7 +417,6 @@ def create_activity_log(
 
     activity = create_activity_model(activity_data)
 
-    # Lưu log vào collection activities
     result = activities_collection.insert_one(activity)
 
     created_activity = activities_collection.find_one({"_id": result.inserted_id})
@@ -369,7 +598,6 @@ def build_permission_query(current_user, args):
     role = args.get("role")
     employee_code = args.get("employee_code")
 
-    # Admin/quản lý được lọc theo user, role, mã nhân viên
     if can_view_all_activities(current_role):
         if user_id:
             if not is_valid_object_id(user_id):
@@ -387,7 +615,6 @@ def build_permission_query(current_user, args):
             query["employee_code"] = employee_code
 
     else:
-        # Nhân viên thường chỉ xem log của chính mình
         query["user_id"] = current_user["_id"]
 
     return query, None, None
@@ -395,21 +622,22 @@ def build_permission_query(current_user, args):
 
 # Tạo query chính để lọc danh sách hoạt động từ request args
 def build_activity_query(args, current_user):
-    permission_query, error_response, error_status = build_permission_query(current_user, args)
+    permission_query, error_response, error_status = build_permission_query(
+        current_user,
+        args,
+    )
 
     if error_response:
         return None, error_response, error_status
 
     query = dict(permission_query)
 
-    # Lấy keyword tìm kiếm, hỗ trợ nhiều tên param khác nhau
     keyword = (
         args.get("keyword")
         or args.get("search")
         or args.get("q")
     )
 
-    # Lấy loại hoạt động cần lọc
     activity_type = (
         args.get("type")
         or args.get("activity_type")
@@ -458,6 +686,11 @@ def build_activity_query(args, current_user):
     if type_condition:
         extra_conditions.append(type_condition)
 
+    time_condition = build_activity_time_condition(args)
+
+    if time_condition:
+        extra_conditions.append(time_condition)
+
     if keyword:
         extra_conditions.append({
             "$or": [
@@ -504,10 +737,8 @@ def get_activities(args, current_user_id):
     if error_response:
         return error_response, error_status
 
-    # Đếm tổng số log khớp điều kiện
     total = activities_collection.count_documents(query)
 
-    # Lấy danh sách log mới nhất trước
     activities = (
         activities_collection
         .find(query)
@@ -541,6 +772,9 @@ def get_activities(args, current_user_id):
             "module": args.get("module") or "Tất cả",
             "action": args.get("action") or "Tất cả",
             "status_code": args.get("status_code") or "Tất cả",
+            "time_filter": args.get("time_filter") or args.get("time_range") or args.get("date_range") or "Tất cả",
+            "start_date": args.get("start_date") or args.get("date_from") or args.get("from_date") or args.get("tu_ngay") or "",
+            "end_date": args.get("end_date") or args.get("date_to") or args.get("to_date") or args.get("den_ngay") or "",
         },
         "pagination": {
             "page": page,
@@ -565,7 +799,10 @@ def get_activity_filter_options(current_user_id):
             "message": "Không tìm thấy user hiện tại"
         }, 404
 
-    permission_query, error_response, error_status = build_permission_query(current_user, {})
+    permission_query, error_response, error_status = build_permission_query(
+        current_user,
+        {},
+    )
 
     if error_response:
         return error_response, error_status
@@ -586,7 +823,6 @@ def get_activity_filter_options(current_user_id):
             "count": count,
         })
 
-    # Gom nhóm log theo người dùng để tạo option lọc theo người thực hiện
     user_pipeline = [
         {
             "$match": permission_query
@@ -737,6 +973,8 @@ def get_activity_stats(current_user_id):
             "delete_count": delete_count,
         }
     }, 200
+
+
 # Xác định loại hoạt động khi xuất Excel
 def detect_activity_export_type(activity):
     module = str(activity.get("module") or "").lower()
@@ -773,13 +1011,14 @@ def detect_activity_export_type(activity):
     return "Hệ thống"
 
 
-# Format thời gian cho file Excel xuất ra
+# Format thời gian cho file Excel xuất ra theo giờ Việt Nam
 def format_activity_export_time(value):
     if not value:
         return ""
 
     if isinstance(value, datetime):
-        return value.strftime("%H:%M %d/%m/%Y")
+        local_value = convert_utc_to_vietnam_time(value)
+        return local_value.strftime("%H:%M %d/%m/%Y")
 
     text = str(value).strip()
 
@@ -799,7 +1038,8 @@ def format_activity_export_time(value):
     for fmt in formats:
         try:
             parsed = datetime.strptime(clean_text[:26], fmt)
-            return parsed.strftime("%H:%M %d/%m/%Y")
+            local_value = convert_utc_to_vietnam_time(parsed)
+            return local_value.strftime("%H:%M %d/%m/%Y")
         except Exception:
             pass
 
@@ -843,12 +1083,10 @@ def get_activities_export(args, current_user_id):
         .limit(10000)
     )
 
-    # Tạo workbook Excel mới
     wb = Workbook()
     ws = wb.active
     ws.title = "Hoạt động"
 
-    # Các cột trong file Excel
     headers = [
         "Người thực hiện",
         "Hành động",
@@ -876,7 +1114,6 @@ def get_activities_export(args, current_user_id):
 
     row_index = 2
 
-    # Ghi từng log hoạt động vào từng dòng Excel
     for activity in activities:
         full_name = (
             activity.get("full_name")
@@ -888,7 +1125,11 @@ def get_activities_export(args, current_user_id):
         action = activity.get("action") or "Thao tác hệ thống"
         activity_type = detect_activity_export_type(activity)
         description = build_activity_export_description(activity)
-        created_at = activity.get("created_at") or activity.get("updated_at") or activity.get("time")
+        created_at = (
+            activity.get("created_at")
+            or activity.get("updated_at")
+            or activity.get("time")
+        )
 
         ws.append([
             full_name,
@@ -900,7 +1141,11 @@ def get_activities_export(args, current_user_id):
 
         for cell in ws[row_index]:
             cell.border = thin_border
-            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            cell.alignment = Alignment(
+                horizontal="left",
+                vertical="top",
+                wrap_text=True,
+            )
 
         row_index += 1
 
@@ -916,12 +1161,11 @@ def get_activities_export(args, current_user_id):
     for row in ws.iter_rows(min_row=2):
         ws.row_dimensions[row[0].row].height = 22
 
-    # Lưu workbook vào bộ nhớ để gửi file về client
     output = BytesIO()
     wb.save(output)
     output.seek(0)
 
-    filename_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename_time = datetime.now(APP_TIMEZONE).strftime("%Y%m%d_%H%M%S")
     filename = f"Activities_{filename_time}.xlsx"
 
     return output, filename, None, 200
