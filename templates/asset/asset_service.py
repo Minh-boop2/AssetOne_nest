@@ -6,7 +6,7 @@ import math
 import re
 
 
-# dùng users_collection để tìm người dùng khi cấp phát tài sản
+# dùng users_collection để tìm người dùng khi cấp phát tài sản và tìm người nhận notification
 from mongo import users_collection
 
 
@@ -22,6 +22,13 @@ from .asset_model import (
     find_assets_by_ids,
     asset_code_exists,
     update_asset_by_query,
+)
+
+
+# import các hàm gửi notification cho nhân viên khi bảo trì hoàn tất / chưa hoàn tất
+from templates.notification.notification_service import (
+    notify_staff_asset_maintenance_completed,
+    notify_staff_asset_maintenance_not_completed,
 )
 
 
@@ -773,6 +780,9 @@ def update_asset(asset_id, data, current_user=None):
             "status_code": 404,
         }
 
+    # lưu lại trạng thái cũ để biết có phải vừa hoàn thành bảo trì hay không
+    old_status = normalize_status_code(asset.get("status"))
+
     # tạo dữ liệu cập nhật và lấy lỗi nếu có
     update_data, errors = build_update_asset_data(data)
 
@@ -809,11 +819,37 @@ def update_asset(asset_id, data, current_user=None):
     update_asset_by_query(update_query, update_data)
 
     updated_asset = find_asset_by_query(update_query)
+    normalized_asset = normalize_asset(updated_asset)
+
+    # Frontend hiện tại đang gọi PUT /api/assets/<id>, không gọi update_asset_status_action().
+    # Vì vậy cần bắt trạng thái bảo trì ngay tại update_asset() để vẫn gửi notification.
+    new_status = normalize_status_code(updated_asset.get("status"))
+    maintenance_action = None
+
+    if "status" in update_data and old_status == "maintenance":
+        # Frontend đang gửi trạng thái "Hoàn thành", normalize_status_code sẽ đổi thành "using".
+        # Vì vậy hoàn thành bảo trì có thể là using hoặc available.
+        if new_status in ["using", "available"]:
+            maintenance_action = "maintenance_done"
+
+        # Frontend đang gửi "Không hoàn thành" thành trạng thái broken.
+        # Vì vậy broken cũng phải hiểu là bảo trì chưa hoàn tất.
+        elif new_status in ["broken", "maintenance"]:
+            maintenance_action = "maintenance_not_done"
+
+
+
+    if maintenance_action:
+        notify_staff_after_maintenance_action(
+            asset=asset,
+            action=maintenance_action,
+            current_user=current_user
+        )
 
     return {
         "success": True,
         "message": "Cập nhật tài sản thành công",
-        "item": normalize_asset(updated_asset),
+        "item": normalized_asset,
         "status_code": 200,
     }
 
@@ -959,9 +995,9 @@ def find_user_for_assign(data):
     email = data.get("email")
 
     # ưu tiên tìm theo user_id nếu là ObjectId hợp lệ
-    if user_id and ObjectId.is_valid(user_id):
+    if user_id and ObjectId.is_valid(str(user_id)):
         return users_collection.find_one({
-            "_id": ObjectId(user_id)
+            "_id": ObjectId(str(user_id))
         })
 
     if employee_code:
@@ -1155,6 +1191,8 @@ def get_dashboard_assets_overview(limit=4, current_user=None):
         },
         "recent_assets": recent_assets,
     }
+
+
 # cấu hình các hành động được phép đổi trạng thái tài sản
 # mỗi action có trạng thái bắt đầu, trạng thái sau khi đổi và câu thông báo
 ASSET_STATUS_ACTIONS = {
@@ -1179,6 +1217,120 @@ ASSET_STATUS_ACTIONS = {
         "message": "Bảo trì chưa hoàn thành, tài sản vẫn ở trạng thái Bảo trì",
     },
 }
+
+
+# lấy id của người đang thao tác để lưu vào created_by của notification
+def get_current_actor_id(current_user=None):
+    if not current_user:
+        return None
+
+    actor_id = (
+        current_user.get("_id")
+        or current_user.get("id")
+        or current_user.get("user_id")
+        or ""
+    )
+
+    if not actor_id:
+        return None
+
+    return str(actor_id)
+
+
+# tìm user nhận notification từ dữ liệu asset
+# Ưu tiên user_id. Nếu user_id rỗng thì tìm bằng employee_code, email, hoặc tên người nhận.
+def find_notification_recipient_user_id_from_asset(asset):
+    if not asset:
+        return None
+
+    user_id = asset.get("user_id")
+
+    if user_id and ObjectId.is_valid(str(user_id)):
+        user = users_collection.find_one({
+            "_id": ObjectId(str(user_id)),
+            "status": {"$ne": "NGUNG_HOAT_DONG"}
+        })
+
+        if user:
+            return str(user.get("_id"))
+
+    employee_code = asset.get("employee_code")
+
+    if employee_code:
+        user = users_collection.find_one({
+            "employee_code": employee_code,
+            "status": {"$ne": "NGUNG_HOAT_DONG"}
+        })
+
+        if user:
+            return str(user.get("_id"))
+
+    email = asset.get("email")
+
+    if email:
+        user = users_collection.find_one({
+            "email": email,
+            "status": {"$ne": "NGUNG_HOAT_DONG"}
+        })
+
+        if user:
+            return str(user.get("_id"))
+
+    receiver_name = (
+        asset.get("receiver")
+        or asset.get("user")
+        or ""
+    ).strip()
+
+    if receiver_name:
+        user = users_collection.find_one({
+            "full_name": receiver_name,
+            "status": {"$ne": "NGUNG_HOAT_DONG"}
+        })
+
+        if user:
+            return str(user.get("_id"))
+
+    return None
+
+
+# gửi notification cho nhân viên khi bảo trì hoàn tất hoặc chưa hoàn tất
+def notify_staff_after_maintenance_action(asset, action, current_user=None):
+    if not asset:
+        return None
+
+    recipient_user_id = find_notification_recipient_user_id_from_asset(asset)
+
+
+    if not recipient_user_id:
+        return None
+
+    asset_id = asset.get("_id") or asset.get("asset_code")
+    asset_name = (
+        asset.get("asset_name")
+        or asset.get("asset")
+        or asset.get("asset_code")
+        or "tài sản"
+    )
+    actor_id = get_current_actor_id(current_user)
+
+    if action == "maintenance_done":
+        return notify_staff_asset_maintenance_completed(
+            recipient_user_id=recipient_user_id,
+            asset_id=asset_id,
+            asset_name=asset_name,
+            completed_by=actor_id
+        )
+
+    if action == "maintenance_not_done":
+        return notify_staff_asset_maintenance_not_completed(
+            recipient_user_id=recipient_user_id,
+            asset_id=asset_id,
+            asset_name=asset_name,
+            checked_by=actor_id
+        )
+
+    return None
 
 
 # đổi trạng thái tài sản theo action đã được cấu hình sẵn
@@ -1235,11 +1387,20 @@ def update_asset_status_action(asset_id, action, current_user=None):
     update_asset_by_query(update_query, update_data)
 
     updated_asset = find_asset_by_query(update_query)
+    normalized_asset = normalize_asset(updated_asset)
+
+    # Gửi notification cho nhân viên khi admin/quản lý bấm Hoàn thành hoặc Không hoàn thành bảo trì.
+    # Hàm này có fallback tìm user theo employee_code / email / receiver nếu asset.user_id bị rỗng.
+    notify_staff_after_maintenance_action(
+        asset=asset,
+        action=action,
+        current_user=current_user
+    )
 
     return {
         "success": True,
         "message": rule["message"],
-        "item": normalize_asset(updated_asset),
+        "item": normalized_asset,
         "old_status": current_status,
         "new_status": rule["to"],
         "action": action,

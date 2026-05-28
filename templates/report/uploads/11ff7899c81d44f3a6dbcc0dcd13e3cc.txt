@@ -1,0 +1,16 @@
+TÀI LIỆU MẪU 020
+Chủ đề: thoát nước
+Mã tài liệu: TL-TXT-020
+Ngày tạo: 2024-03-06
+
+Trạng thái: đang kiểm tra, cần bổ sung dữ liệu khi có hồ sơ chính thức.
+Các thông số trong tài liệu chỉ mang tính minh họa, không dùng cho thi công thực tế.
+Nội dung được tạo ngẫu nhiên để dùng làm dữ liệu thử nghiệm upload.
+Ngày cập nhật: 2024-07-14. Người phụ trách: Dũng.
+Tài liệu này ghi nhận thông tin mẫu về thoát nước.
+Ghi chú: có thể đổi tên hoặc di chuyển sang thư mục khác tùy nhu cầu.
+
+Danh sách mục:
+1. Kiểm tra hiện trạng thoát nước
+2. Ghi nhận số lượng và hình ảnh liên quan
+3. Tổng hợp kết quả và đề xuất bước tiếp theo

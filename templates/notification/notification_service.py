@@ -473,6 +473,61 @@ def notify_staff_asset_revoked(
         },
         created_by=revoked_by
     )
+
+
+# Thông báo cho nhân viên khi bảo trì tài sản hoàn tất
+def notify_staff_asset_maintenance_completed(
+    recipient_user_id,
+    asset_id=None,
+    asset_name=None,
+    completed_by=None
+):
+    name = asset_name or "tài sản"
+
+    return send_notification(
+        recipient_user_id=recipient_user_id,
+        title="Bảo trì tài sản hoàn tất",
+        message=f"Tài sản {name} đã bảo trì xong và sẵn sàng sử dụng lại.",
+        notification_type="asset_maintenance_completed",
+        data={
+            "asset_id": str(asset_id) if asset_id else None,
+            "asset_name": asset_name,
+            "status": "maintenance_completed"
+        },
+        created_by=completed_by
+    )
+
+
+# Thông báo cho nhân viên khi bảo trì tài sản chưa hoàn tất
+def notify_staff_asset_maintenance_not_completed(
+    recipient_user_id,
+    asset_id=None,
+    asset_name=None,
+    checked_by=None,
+    reason=None
+):
+    name = asset_name or "tài sản"
+
+    message = f"Bảo trì tài sản {name} chưa hoàn tất. tạm thời sẽ thu hồi ."
+
+    if reason:
+        message += f" Lý do: {reason}"
+
+    return send_notification(
+        recipient_user_id=recipient_user_id,
+        title="Bảo trì tài sản chưa hoàn tất",
+        message=message,
+        notification_type="asset_maintenance_not_completed",
+        data={
+            "asset_id": str(asset_id) if asset_id else None,
+            "asset_name": asset_name,
+            "reason": reason,
+            "status": "maintenance_not_completed"
+        },
+        created_by=checked_by
+    )
+
+
 # Lấy id của người đang thực hiện hành động
 def _get_actor_id(actor_user):
     if not actor_user:

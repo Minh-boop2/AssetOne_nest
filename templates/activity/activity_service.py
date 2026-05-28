@@ -51,6 +51,43 @@ ACTIVITY_TYPE_OPTIONS = [
 ]
 
 
+# Các module/path không cần ghi lịch sử hoạt động
+# Notification chỉ là thông báo nội bộ, ví dụ bấm Xem để đánh dấu đã đọc
+# nên không cần sinh log "Cập nhật dữ liệu notifications"
+SKIP_ACTIVITY_LOG_MODULES = [
+    "notification",
+    "notifications",
+]
+
+SKIP_ACTIVITY_LOG_PATHS = [
+    "/api/notifications",
+    "/notifications",
+    "/socket.io",
+]
+
+
+# Kiểm tra có nên bỏ qua ghi log hay không
+def should_skip_activity_log(module=None, path=None, action=None):
+    module_text = str(module or "").strip().lower()
+    path_text = str(path or "").strip().lower()
+    action_text = str(action or "").strip().lower()
+
+    if module_text in SKIP_ACTIVITY_LOG_MODULES:
+        return True
+
+    for skip_path in SKIP_ACTIVITY_LOG_PATHS:
+        if path_text.startswith(skip_path):
+            return True
+
+    if "notification" in path_text or "notifications" in path_text:
+        return True
+
+    if "notification" in action_text or "notifications" in action_text:
+        return True
+
+    return False
+
+
 # Tìm người dùng hiện tại theo user_id
 def get_current_user_by_id(user_id):
     if not user_id:
@@ -354,6 +391,8 @@ def build_action_from_request(method, path):
         "reports": "báo cáo",
         "activities": "hoạt động",
         "system": "hệ thống",
+        "notifications": "thông báo",
+        "notification": "thông báo",
     }
 
     module_name = module_name_map.get(module, module)
@@ -382,6 +421,15 @@ def create_activity_log(
     target_name=None,
     metadata=None,
 ):
+    # Không ghi log cho notification
+    # Ví dụ: bấm Xem notification sẽ cập nhật is_read/read_at,
+    # thao tác này không cần lưu vào lịch sử hoạt động.
+    if should_skip_activity_log(module=module, path=path, action=action):
+        return {
+            "success": True,
+            "message": "Bỏ qua ghi log notification"
+        }, 200
+
     current_user = get_current_user_by_id(user_id)
 
     if not current_user:
@@ -412,7 +460,7 @@ def create_activity_log(
         "target_id": target_id,
         "target_name": target_name,
 
-        "metadata": metadata or {},
+        "metadata": clean_metadata(metadata or {}),
     }
 
     activity = create_activity_model(activity_data)

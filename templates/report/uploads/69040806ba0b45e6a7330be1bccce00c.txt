@@ -1,0 +1,16 @@
+TÀI LIỆU MẪU 019
+Chủ đề: đường ống nước
+Mã tài liệu: TL-TXT-019
+Ngày tạo: 2024-06-10
+
+Ghi chú: có thể đổi tên hoặc di chuyển sang thư mục khác tùy nhu cầu.
+Tài liệu này ghi nhận thông tin mẫu về đường ống nước.
+Các thông số trong tài liệu chỉ mang tính minh họa, không dùng cho thi công thực tế.
+Trạng thái: đang kiểm tra, cần bổ sung dữ liệu khi có hồ sơ chính thức.
+Ngày cập nhật: 2025-05-02. Người phụ trách: Phúc.
+Nội dung được tạo ngẫu nhiên để dùng làm dữ liệu thử nghiệm upload.
+
+Danh sách mục:
+1. Kiểm tra hiện trạng đường ống nước
+2. Ghi nhận số lượng và hình ảnh liên quan
+3. Tổng hợp kết quả và đề xuất bước tiếp theo

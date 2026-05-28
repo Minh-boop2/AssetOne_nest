@@ -1,0 +1,20 @@
+FOLDER WIP - QUY TẮC ĐẶT TÊN
+
+Tổng số file: 71
+
+Nội dung:
+- Quy tắc đặt tên file
+- Quy tắc đặt tên thư mục
+- Mẫu tên file
+- Ví dụ tên file đúng/sai
+- Checklist upload
+- Bảng mã phòng ban, loại tài liệu, trạng thái
+- File JSON cấu hình quy ước
+
+Cấu trúc khuyến nghị:
+YYYYMMDD_PHONGBAN_LOAI_TEN-NGAN_vXX_TRANGTHAI.ext
+
+Ví dụ:
+20260526_IT_HD_QUY-TAC-DAT-TEN_v01_WIP.md
+
+Dữ liệu này là tài liệu mẫu để upload vào thư mục WIP.

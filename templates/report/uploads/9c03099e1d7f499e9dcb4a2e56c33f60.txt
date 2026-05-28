@@ -1,0 +1,16 @@
+TÀI LIỆU MẪU 022
+Chủ đề: hệ thống PCCC
+Mã tài liệu: TL-TXT-022
+Ngày tạo: 2024-06-11
+
+Trạng thái: đang kiểm tra, cần bổ sung dữ liệu khi có hồ sơ chính thức.
+Tài liệu này ghi nhận thông tin mẫu về hệ thống PCCC.
+Ghi chú: có thể đổi tên hoặc di chuyển sang thư mục khác tùy nhu cầu.
+Các thông số trong tài liệu chỉ mang tính minh họa, không dùng cho thi công thực tế.
+Ngày cập nhật: 2025-08-05. Người phụ trách: Nam.
+Nội dung được tạo ngẫu nhiên để dùng làm dữ liệu thử nghiệm upload.
+
+Danh sách mục:
+1. Kiểm tra hiện trạng hệ thống PCCC
+2. Ghi nhận số lượng và hình ảnh liên quan
+3. Tổng hợp kết quả và đề xuất bước tiếp theo
