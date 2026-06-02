@@ -352,9 +352,8 @@ def _get_current_user_reported_asset_keys(current_user=None):
     locked_keys = set()
 
     for report in reports:
-        for key in ["asset_id", "asset_code", "asset"]:
-            value = _string_key(report.get(key))
-
+        # Hỗ trợ cả báo cáo cũ chỉ có 1 tài sản và báo cáo mới có nhiều tài sản.
+        for value in _get_asset_keys_from_report(report):
             if value:
                 locked_keys.add(value)
 
@@ -576,23 +575,119 @@ def _find_user_for_report(report):
     return None
 
 
-# Lấy khóa tài sản từ data gửi lên
+# Chuẩn hóa dữ liệu tài sản gửi lên / lưu trong báo cáo về danh sách key
+def _normalize_asset_key_values(value):
+    values = []
+
+    if value is None:
+        return values
+
+    if isinstance(value, dict):
+        for key in ["asset_id", "id", "_id", "asset_code", "code", "value", "asset"]:
+            item_value = value.get(key)
+
+            if item_value:
+                values.extend(_normalize_asset_key_values(item_value))
+                break
+
+        return values
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_normalize_asset_key_values(item))
+
+        return values
+
+    if isinstance(value, str):
+        # Frontend có thể gửi ["A1", "A2"] hoặc "A1,A2".
+        parts = re.split(r"[,;]", value)
+        return [
+            part.strip()
+            for part in parts
+            if part and part.strip()
+        ]
+
+    value = _string_key(value)
+
+    if value:
+        values.append(value)
+
+    return values
+
+
+# Loại trùng nhưng vẫn giữ đúng thứ tự chọn tài sản
+def _unique_asset_keys(values):
+    unique_values = []
+    seen_values = set()
+
+    for value in values:
+        value = _string_key(value)
+
+        if not value or value in seen_values:
+            continue
+
+        unique_values.append(value)
+        seen_values.add(value)
+
+    return unique_values
+
+
+# Lấy danh sách khóa tài sản từ data gửi lên
+def _get_asset_keys_from_data(data):
+    data = data or {}
+    values = []
+
+    multi_asset_fields = [
+        "asset_ids",
+        "asset_codes",
+        "assets",
+        "selected_assets",
+        "selected_asset_ids",
+        "selected_asset_codes",
+    ]
+
+    single_asset_fields = [
+        "asset_id",
+        "asset_code",
+        "asset",
+    ]
+
+    for field in multi_asset_fields + single_asset_fields:
+        if field in data:
+            values.extend(_normalize_asset_key_values(data.get(field)))
+
+    return _unique_asset_keys(values)
+
+
+# Lấy khóa tài sản đầu tiên từ data gửi lên để tương thích code cũ
 def _get_asset_key_from_data(data):
-    return (
-        _value(data, "asset_id", default="")
-        or _value(data, "asset_code", default="")
-        or _value(data, "asset", default="")
-    )
+    asset_keys = _get_asset_keys_from_data(data)
+
+    return asset_keys[0] if asset_keys else ""
 
 
-# Lấy khóa tài sản từ dữ liệu báo cáo
+# Lấy danh sách khóa tài sản từ dữ liệu báo cáo
+def _get_asset_keys_from_report(report):
+    report = report or {}
+    values = []
+
+    for field in ["asset_ids", "asset_codes"]:
+        values.extend(_normalize_asset_key_values(report.get(field)))
+
+    for asset in report.get("assets") or []:
+        values.extend(_normalize_asset_key_values(asset))
+
+    for field in ["asset_id", "asset_code", "asset"]:
+        values.extend(_normalize_asset_key_values(report.get(field)))
+
+    return _unique_asset_keys(values)
+
+
+# Lấy khóa tài sản đầu tiên từ dữ liệu báo cáo 
 def _get_asset_key_from_report(report):
-    return (
-        report.get("asset_id")
-        or report.get("asset_code")
-        or report.get("asset")
-        or ""
-    )
+    asset_keys = _get_asset_keys_from_report(report)
+
+    return asset_keys[0] if asset_keys else ""
 
 
 # Tìm tài sản đang sở hữu của user để gắn vào báo cáo
@@ -619,6 +714,92 @@ def _get_owned_asset(asset_key, current_user=None):
         return None, "Chỉ được chọn tài sản đang sử dụng / đang sở hữu."
 
     return asset, None
+
+
+# Tìm nhiều tài sản đang sở hữu của user để gắn vào cùng một báo cáo
+def _get_owned_assets(asset_keys, current_user=None):
+    asset_keys = _unique_asset_keys(asset_keys)
+
+    if not asset_keys:
+        return [], "Vui lòng chọn ít nhất một tài sản."
+
+    assets = []
+
+    for asset_key in asset_keys:
+        asset, asset_error = _get_owned_asset(
+            asset_key=asset_key,
+            current_user=current_user,
+        )
+
+        if asset_error:
+            return [], f"{asset_error} ({asset_key})"
+
+        assets.append(asset)
+
+    return assets, None
+
+
+# Tạo các field tài sản lưu trong báo cáo.
+# Giữ asset_id / asset_code / asset_name của tài sản đầu tiên để không vỡ UI/API cũ,
+# đồng thời lưu assets / asset_ids / asset_codes để xử lý nhiều tài sản.
+def _build_report_asset_fields(assets):
+    assets = assets or []
+    asset_records = []
+
+    for asset in assets:
+        asset_id = _string_key(asset.get("id") or asset.get("_id"))
+        asset_code = _string_key(asset.get("asset_code") or asset.get("code"))
+        asset_name = (
+            asset.get("asset_name")
+            or asset.get("asset")
+            or asset.get("name")
+            or "Chưa xác định"
+        )
+
+        asset_records.append({
+            "asset_id": asset_id,
+            "asset_code": asset_code,
+            "asset_name": asset_name,
+            "asset": asset_name,
+            "asset_type": asset.get("type") or asset.get("category") or "",
+            "type": asset.get("type") or asset.get("category") or "",
+            "category": asset.get("category") or asset.get("type") or "",
+            "asset_status": asset.get("status") or "",
+            "status": asset.get("status") or "",
+            "department": asset.get("department") or "",
+            "location": asset.get("location") or "",
+            "user_id": asset.get("user_id") or "",
+            "employee_code": asset.get("employee_code") or "",
+            "user": asset.get("user") or asset.get("receiver") or "",
+            "receiver": asset.get("receiver") or asset.get("user") or "",
+        })
+
+    first_asset = asset_records[0] if asset_records else {}
+
+    return {
+        "asset_id": first_asset.get("asset_id", ""),
+        "asset_code": first_asset.get("asset_code", ""),
+        "asset_name": first_asset.get("asset_name", "Chưa xác định"),
+        "asset_type": first_asset.get("asset_type", ""),
+        "asset_status": first_asset.get("asset_status", ""),
+        "assets": asset_records,
+        "asset_ids": [
+            item.get("asset_id")
+            for item in asset_records
+            if item.get("asset_id")
+        ],
+        "asset_codes": [
+            item.get("asset_code")
+            for item in asset_records
+            if item.get("asset_code")
+        ],
+        "asset_names": [
+            item.get("asset_name")
+            for item in asset_records
+            if item.get("asset_name")
+        ],
+        "asset_count": len(asset_records),
+    }
 
 
 # Tạo query lọc danh sách báo cáo theo search, loại, trạng thái, phòng ban, vị trí
@@ -986,13 +1167,13 @@ def create_report(data, uploaded_files=None, current_user=None):
         }, 400
 
     report_type = _value(data, "report_type", "type")
-    asset_key = _get_asset_key_from_data(data)
+    asset_keys = _get_asset_keys_from_data(data)
 
-    asset = None
+    assets = []
 
     if report_type in ASSET_REQUIRED_REPORT_TYPES:
-        asset, asset_error = _get_owned_asset(
-            asset_key=asset_key,
+        assets, asset_error = _get_owned_assets(
+            asset_keys=asset_keys,
             current_user=current_user,
         )
 
@@ -1002,11 +1183,20 @@ def create_report(data, uploaded_files=None, current_user=None):
                 "message": asset_error,
             }, 400
 
-        if _asset_has_locked_report(asset, current_user=current_user):
-            return {
-                "success": False,
-                "message": "Bạn đã tạo báo cáo cho tài sản này. Vui lòng chọn tài sản khác.",
-            }, 409
+        for asset in assets:
+            if _asset_has_locked_report(asset, current_user=current_user):
+                asset_label = (
+                    asset.get("asset_code")
+                    or asset.get("asset_name")
+                    or asset.get("asset")
+                    or asset.get("id")
+                    or ""
+                )
+
+                return {
+                    "success": False,
+                    "message": f"Bạn đã tạo báo cáo cho tài sản {asset_label}. Vui lòng chọn tài sản khác.",
+                }, 409
 
     try:
         report_code = generate_unique_report_code()
@@ -1041,15 +1231,7 @@ def create_report(data, uploaded_files=None, current_user=None):
         "reporter": _current_user_name(current_user),
         "reporter_role": _current_user_role_label(current_user),
 
-        "asset_id": asset.get("id") if asset else "",
-        "asset_code": asset.get("asset_code") if asset else "",
-        "asset_name": (
-            asset.get("asset_name")
-            or asset.get("asset")
-            if asset else "Chưa xác định"
-        ) or "Chưa xác định",
-        "asset_type": asset.get("type") if asset else "",
-        "asset_status": asset.get("status") if asset else "",
+        **_build_report_asset_fields(assets),
 
         "department": _current_user_department(current_user),
         "location": _current_user_location(current_user),
@@ -1152,11 +1334,11 @@ def update_report(report_id, data, uploaded_files=None, current_user=None):
         if new_value is not None:
             update_data[field] = new_value
 
-    asset_key = _get_asset_key_from_data(data)
+    asset_keys = _get_asset_keys_from_data(data)
 
-    if asset_key:
-        asset, asset_error = _get_owned_asset(
-            asset_key=asset_key,
+    if asset_keys:
+        assets, asset_error = _get_owned_assets(
+            asset_keys=asset_keys,
             current_user=current_user,
         )
 
@@ -1166,11 +1348,7 @@ def update_report(report_id, data, uploaded_files=None, current_user=None):
                 "message": asset_error,
             }, 400
 
-        update_data["asset_id"] = asset.get("id")
-        update_data["asset_code"] = asset.get("asset_code")
-        update_data["asset_name"] = asset.get("asset_name") or asset.get("asset") or "Chưa xác định"
-        update_data["asset_type"] = asset.get("type")
-        update_data["asset_status"] = asset.get("status")
+        update_data.update(_build_report_asset_fields(assets))
 
     current_files = report.get("files", [])
 
@@ -1233,40 +1411,64 @@ def approve_report(report_id, data=None, current_user=None):
         }, 400
 
     report_type = report.get("report_type")
-    asset_key = _get_asset_key_from_report(report)
+    asset_keys = _get_asset_keys_from_report(report)
 
     asset_action_result = None
 
     if report_type == "Báo hỏng":
-        if not asset_key:
+        if not asset_keys:
             return {
                 "success": False,
                 "message": "Báo cáo chưa có tài sản để chuyển sang trạng thái bảo trì.",
             }, 400
 
-        result = update_asset(
-            asset_id=asset_key,
-            data={
-                "status": "maintenance"
-            },
-            current_user=current_user,
-        )
+        updated_assets = []
+        failed_assets = []
 
-        if not result.get("success"):
+        for asset_key in asset_keys:
+            result = update_asset(
+                asset_id=asset_key,
+                data={
+                    "status": "maintenance"
+                },
+                current_user=current_user,
+            )
+
+            if not result.get("success"):
+                failed_assets.append({
+                    "asset_key": asset_key,
+                    "message": result.get("message") or "Không thể cập nhật trạng thái tài sản.",
+                    "status_code": result.get("status_code", 400),
+                })
+                continue
+
+            updated_assets.append(result.get("item"))
+
+        if failed_assets:
             return {
                 "success": False,
-                "message": result.get("message") or "Không thể cập nhật trạng thái tài sản.",
-            }, result.get("status_code", 400)
+                "message": "Một số tài sản chưa chuyển được sang trạng thái bảo trì.",
+                "asset_action_result": {
+                    "action": "mark_maintenance",
+                    "updated_count": len(updated_assets),
+                    "failed_count": len(failed_assets),
+                    "updated_assets": updated_assets,
+                    "failed_assets": failed_assets,
+                },
+            }, failed_assets[0].get("status_code", 400)
 
         asset_action_result = {
             "action": "mark_maintenance",
-            "message": "Đã chuyển tài sản sang trạng thái bảo trì.",
-            "asset": result.get("item"),
+            "message": f"Đã chuyển {len(updated_assets)} tài sản sang trạng thái bảo trì.",
+            "asset_count": len(updated_assets),
+            "assets": updated_assets,
+            # Giữ field asset cũ để frontend cũ vẫn đọc được tài sản đầu tiên.
+            "asset": updated_assets[0] if updated_assets else None,
         }
 
     elif report_type == "Cần cấp mới":
 
-        if not asset_key:
+        if not asset_keys:
             return {
                 "success": False,
                 "message": "Báo cáo chưa có tài sản để cấp phát.",
@@ -1280,25 +1482,49 @@ def approve_report(report_id, data=None, current_user=None):
                 "message": "Không tìm thấy người báo cáo để cấp phát tài sản.",
             }, 404
 
-        result = assign_asset(
-            asset_id=asset_key,
-            data={
-                "user_id": str(reporter.get("_id")),
-                "employee_code": reporter.get("employee_code") or "",
-                "email": reporter.get("email") or "",
-            }
-        )
+        assigned_assets = []
+        failed_assets = []
 
-        if not result.get("success"):
+        for asset_key in asset_keys:
+            result = assign_asset(
+                asset_id=asset_key,
+                data={
+                    "user_id": str(reporter.get("_id")),
+                    "employee_code": reporter.get("employee_code") or "",
+                    "email": reporter.get("email") or "",
+                }
+            )
+
+            if not result.get("success"):
+                failed_assets.append({
+                    "asset_key": asset_key,
+                    "message": result.get("message") or "Không thể cấp phát tài sản.",
+                    "status_code": result.get("status_code", 400),
+                })
+                continue
+
+            assigned_assets.append(result.get("item"))
+
+        if failed_assets:
             return {
                 "success": False,
-                "message": result.get("message") or "Không thể cấp phát tài sản.",
-            }, result.get("status_code", 400)
+                "message": "Một số tài sản chưa cấp phát được.",
+                "asset_action_result": {
+                    "action": "assign_to_reporter",
+                    "assigned_count": len(assigned_assets),
+                    "failed_count": len(failed_assets),
+                    "assigned_assets": assigned_assets,
+                    "failed_assets": failed_assets,
+                },
+            }, failed_assets[0].get("status_code", 400)
 
         asset_action_result = {
             "action": "assign_to_reporter",
-            "message": "Đã cấp phát tài sản cho người báo cáo.",
-            "asset": result.get("item"),
+            "message": f"Đã cấp phát {len(assigned_assets)} tài sản cho người báo cáo.",
+            "asset_count": len(assigned_assets),
+            "assets": assigned_assets,
+            # Giữ field asset cũ để frontend cũ vẫn đọc được tài sản đầu tiên.
+            "asset": assigned_assets[0] if assigned_assets else None,
         }
 
     else:
