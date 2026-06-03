@@ -11,6 +11,7 @@ from templates.user.user_model import (
     VALID_ROLES,
     VALID_STATUS,
     is_valid_object_id,
+    now_vietnam,
 )
 
 from templates.permission.permission_model import (
@@ -375,6 +376,8 @@ def update_user(id, data):
 
 
 # Xóa user theo id
+# Trong nghiệp vụ hiện tại: xóa nhân sự = chuyển sang trạng thái đã nghỉ
+# Không xóa record khỏi MongoDB để trang thống kê vẫn đếm được nhân viên đã nghỉ
 def delete_user(id):
     if not is_valid_object_id(id):
         return {
@@ -390,11 +393,22 @@ def delete_user(id):
             "message": "Không tìm thấy user"
         }, 404
 
-    users_collection.delete_one({"_id": ObjectId(id)})
+    users_collection.update_one(
+        {"_id": ObjectId(id)},
+        {
+            "$set": {
+                "status": "NGUNG_HOAT_DONG",
+                "updated_at": now_vietnam()
+            }
+        }
+    )
+
+    updated_user = users_collection.find_one({"_id": ObjectId(id)})
 
     return {
         "success": True,
-        "message": "Xóa user thành công"
+        "message": "Nhân viên đã được chuyển sang trạng thái đã nghỉ",
+        "data": user_serializer(updated_user)
     }, 200
 
 

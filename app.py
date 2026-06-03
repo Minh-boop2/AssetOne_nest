@@ -14,6 +14,7 @@ from templates.mail.mail_controller import register_mail_api_routes
 from templates.permission.permission_controller import register_permissions_api_routes
 from templates.activity.activity_controller import register_activity_api_routes
 from templates.notification.notification_controller import register_notifications_api_routes
+from templates.statistical.statistical_controller import register_statistical_api_routes
 
 
 load_dotenv()
@@ -27,6 +28,7 @@ socketio = SocketIO(
     async_mode="eventlet"
 )
 
+
 register_assets_api_routes(app)
 register_assign_api_routes(app)
 register_users_api_routes(app)
@@ -35,6 +37,7 @@ register_permissions_api_routes(app)
 register_reports_api_routes(app)
 register_activity_api_routes(app)
 register_notifications_api_routes(app, socketio)
+register_statistical_api_routes(app)
 
 
 @app.route("/")
@@ -48,7 +51,8 @@ def home():
         "permissions_api": "/api/permissions",
         "reports_api": "/api/reports",
         "activities_api": "/api/activities",
-        "notifications_api": "/api/notifications"
+        "notifications_api": "/api/notifications",
+        "statistical_api": "/api/statistical"
     })
 
 
