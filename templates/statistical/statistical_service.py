@@ -1,6 +1,9 @@
 # File: statistical_service.py
-# File này xử lý logic thống kê
-# Chỉ đọc dữ liệu từ users_collection, không sửa dữ liệu module khác
+# Nhiệm vụ:
+# - Xử lý logic thống kê nhân viên.
+# - Chỉ đọc dữ liệu từ users_collection.
+# - Không sửa, không xóa dữ liệu của module quản lý nhân viên.
+# - Không xử lý doanh thu, tiền tệ, tài sản, cấp phát, báo cáo.
 
 from collections import Counter
 
@@ -14,10 +17,11 @@ from templates.statistical.statistical_model import (
     employee_serializer,
     get_role_label,
     format_number,
-    format_money,
 )
 
 
+# Sắp xếp counter theo số lượng giảm dần.
+# Nếu bằng số lượng thì sắp xếp theo tên tăng dần.
 def sort_counter(counter):
     return dict(
         sorted(
@@ -27,6 +31,8 @@ def sort_counter(counter):
     )
 
 
+# API service chính cho trang thống kê nhân viên.
+# Dữ liệu lấy trực tiếp từ collection users.
 def get_statistical_employees():
     users = list(
         users_collection
@@ -103,138 +109,7 @@ def get_statistical_employees():
     }, 200
 
 
+# Giữ route overview để frontend cũ vẫn chạy được nếu còn gọi /api/statistical/overview.
+# Nhưng dữ liệu overview bây giờ cũng chính là thống kê nhân viên.
 def get_statistical_overview():
-    finance_summary = {
-        "total_revenue_text": format_money(0),
-        "total_cost_text": format_money(0),
-        "total_profit_text": format_money(0),
-        "total_loss_text": format_money(0),
-        "total_orders_text": format_number(0),
-    }
-
-    finance_cards = [
-        {
-            "title": "Doanh thu",
-            "value": finance_summary["total_revenue_text"],
-            "icon": "💰",
-            "class": "purple",
-            "desc": "Tổng tiền thu được trong hệ thống",
-        },
-        {
-            "title": "Chi phí",
-            "value": finance_summary["total_cost_text"],
-            "icon": "💳",
-            "class": "cyan",
-            "desc": "Tổng chi phí vận hành và xử lý",
-        },
-        {
-            "title": "Tiền lời",
-            "value": finance_summary["total_profit_text"],
-            "icon": "📈",
-            "class": "green",
-            "desc": "Lợi nhuận sau khi trừ chi phí",
-        },
-        {
-            "title": "Tiền lỗ",
-            "value": finance_summary["total_loss_text"],
-            "icon": "📉",
-            "class": "orange",
-            "desc": "Tổn thất phát sinh trong hệ thống",
-        },
-    ]
-
-    finance_segments = build_segments([
-        {
-            "label": "Doanh thu",
-            "value": 0,
-            "value_text": format_money(0),
-            "color": "#8b5cf6",
-            "class": "purple",
-        },
-        {
-            "label": "Chi phí",
-            "value": 0,
-            "value_text": format_money(0),
-            "color": "#06b6d4",
-            "class": "cyan",
-        },
-        {
-            "label": "Tiền lời",
-            "value": 0,
-            "value_text": format_money(0),
-            "color": "#22c55e",
-            "class": "green",
-        },
-        {
-            "label": "Tiền lỗ",
-            "value": 0,
-            "value_text": format_money(0),
-            "color": "#f97316",
-            "class": "orange",
-        },
-    ])
-
-    return {
-        "success": True,
-        "message": "Lấy thống kê tổng quan thành công",
-        "data": {
-            "finance_summary": finance_summary,
-            "finance_months": [],
-            "finance_cards": finance_cards,
-            "finance_segments": finance_segments,
-            "revenue_sources": [],
-            "expense_categories": [],
-            "financial_reports": [],
-            "total_revenue_text": finance_summary["total_revenue_text"],
-            "total_cost_text": finance_summary["total_cost_text"],
-            "total_profit_text": finance_summary["total_profit_text"],
-            "total_loss_text": finance_summary["total_loss_text"],
-            "total_orders_text": finance_summary["total_orders_text"],
-        }
-    }, 200
-
-
-def get_statistical_assets():
-    return {
-        "success": True,
-        "message": "Chưa cấu hình thống kê tài sản",
-        "data": {
-            "total_assets": 0,
-            "type_items": [],
-            "status_segments": [],
-            "recent_assets": [],
-            "damaged_assets": [],
-            "total_damaged": 0,
-            "total_repair_cost": 0,
-            "total_repair_cost_text": "0đ",
-            "repair_level_items": [],
-            "repair_status_segments": [],
-        }
-    }, 200
-
-
-def get_statistical_assign():
-    return {
-        "success": True,
-        "message": "Chưa cấu hình thống kê cấp phát",
-        "data": {
-            "assign_total": 0,
-            "status_segments": [],
-            "dept_items": [],
-            "location_items": [],
-        }
-    }, 200
-
-
-def get_statistical_report():
-    return {
-        "success": True,
-        "message": "Chưa cấu hình thống kê báo cáo",
-        "data": {
-            "report_total": 0,
-            "log_items": [],
-            "status_items": [],
-            "log_segments": [],
-            "recent_logs": [],
-        }
-    }, 200
+    return get_statistical_employees()
