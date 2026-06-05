@@ -60,3 +60,13 @@ def update_asset_by_query(query, update_data):
             "$set": update_data
         }
     )
+
+# cập nhật nhiều tài sản theo query
+# dùng khi tài khoản người dùng ngưng hoạt động và cần thu hồi tất cả tài sản đang cấp cho user đó
+def update_many_assets_by_query(query, update_data):
+    return assets_collection.update_many(
+        query,
+        {
+            "$set": update_data
+        }
+    )

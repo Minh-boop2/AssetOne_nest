@@ -217,6 +217,11 @@ def register_assets_api_routes(app):
         per_page = request.args.get("per_page", 10, type=int)
         search = request.args.get("search", "", type=str).strip()
         asset_type = request.args.get("type", "Tất cả", type=str)
+
+        # THÊM: nhận danh sách nhiều loại tài sản từ frontend
+        # URL ví dụ: /api/assets?types=laptop,pc,printer
+        asset_types = request.args.get("types", "", type=str)
+
         department = request.args.get("department", "Tất cả", type=str)
         status = request.args.get("status", "Tất cả", type=str)
 
@@ -227,6 +232,8 @@ def register_assets_api_routes(app):
                 per_page=per_page,
                 search=search,
                 asset_type=asset_type,
+                # THÊM: truyền danh sách nhiều loại tài sản xuống service
+                asset_types=asset_types,
                 department=department,
                 status=status,
                 current_user=current_user,
@@ -577,12 +584,12 @@ def register_assets_api_routes(app):
             asset=item,
             old_receiver=old_receiver,
         )
-        
 
         return jsonify({
             "message": result["message"],
             "item": item,
         }), 200
+
     # API xử lý các hành động đổi trạng thái tài sản
     # ví dụ: đưa đi bảo trì, hoàn thành bảo trì
     @app.route("/api/assets/<string:asset_id>/status-action", methods=["PATCH"])

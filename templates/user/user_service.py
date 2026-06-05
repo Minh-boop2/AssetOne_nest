@@ -127,6 +127,38 @@ def user_serializer_with_permissions(user):
     return data
 
 
+# THÊM: gọi module tài sản để thu hồi tài sản khi user ngưng hoạt động
+# để import trong hàm nhằm tránh lỗi import vòng giữa user_service và asset_service
+# nếu folder của bạn là templates.asset thì chạy nhánh đầu, nếu là templates.assets thì chạy nhánh sau
+def release_assets_for_inactive_user_safely(updated_user):
+    if not updated_user:
+        return {
+            "success": False,
+            "message": "Không có dữ liệu user để thu hồi tài sản",
+            "matched_count": 0,
+            "modified_count": 0,
+        }
+
+    try:
+        try:
+            from templates.asset.asset_service import release_assets_when_user_inactive
+        except ModuleNotFoundError:
+            from templates.assets.asset_service import release_assets_when_user_inactive
+
+        return release_assets_when_user_inactive(user=updated_user)
+
+    except Exception as error:
+        # THÊM: không để lỗi thu hồi tài sản làm hỏng API cập nhật user
+        # nếu có lỗi thì API user vẫn chạy, frontend vẫn nhận được thông tin lỗi ở asset_release
+        return {
+            "success": False,
+            "message": "Cập nhật user thành công nhưng thu hồi tài sản bị lỗi",
+            "error": str(error),
+            "matched_count": 0,
+            "modified_count": 0,
+        }
+
+
 # Tạo user mới
 # Kiểm tra dữ liệu bắt buộc, role, trạng thái và trùng mã nhân viên/email trước khi lưu
 def create_user(data):
@@ -367,12 +399,30 @@ def update_user(id, data):
     )
 
     updated_user = users_collection.find_one({"_id": ObjectId(id)})
+    asset_release_result = None
 
-    return {
+    # THÊM: nếu update user từ HOAT_DONG sang NGUNG_HOAT_DONG
+    # thì tự động thu hồi tài sản đang cấp cho user đó
+    # tài sản sẽ về trạng thái Chưa sử dụng, không xóa tài sản khỏi hệ thống
+    if (
+        updated_user
+        and data.get("status") == "NGUNG_HOAT_DONG"
+        and user.get("status") != "NGUNG_HOAT_DONG"
+    ):
+        asset_release_result = release_assets_for_inactive_user_safely(updated_user)
+
+    response = {
         "success": True,
         "message": "Cập nhật user thành công",
         "data": user_serializer(updated_user)
-    }, 200
+    }
+
+    # THÊM: trả thêm kết quả thu hồi tài sản nếu có phát sinh thu hồi
+    # frontend cũ không dùng field này thì vẫn không bị ảnh hưởng
+    if asset_release_result is not None:
+        response["asset_release"] = asset_release_result
+
+    return response, 200
 
 
 # Xóa user theo id
@@ -405,10 +455,16 @@ def delete_user(id):
 
     updated_user = users_collection.find_one({"_id": ObjectId(id)})
 
+    # THÊM: khi xóa user theo nghiệp vụ hiện tại là chuyển sang trạng thái ngưng hoạt động
+    # nên cũng tự động thu hồi toàn bộ tài sản đang cấp cho user đó
+    # tài sản sẽ về trạng thái Chưa sử dụng, không xóa tài sản khỏi hệ thống
+    asset_release_result = release_assets_for_inactive_user_safely(updated_user)
+
     return {
         "success": True,
         "message": "Nhân viên đã được chuyển sang trạng thái đã nghỉ",
-        "data": user_serializer(updated_user)
+        "data": user_serializer(updated_user),
+        "asset_release": asset_release_result
     }, 200
 
 

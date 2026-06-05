@@ -22,6 +22,7 @@ from .asset_model import (
     find_assets_by_ids,
     asset_code_exists,
     update_asset_by_query,
+    update_many_assets_by_query,
 )
 
 
@@ -110,6 +111,18 @@ STATUS_BADGE_CLASSES = {
 
 # các role này được xem toàn bộ tài sản trong hệ thống
 FULL_ASSET_ROLES = ["ADMIN", "QUAN_LY"]
+
+
+# THÊM: danh sách phòng ban cố định của hệ thống
+# dùng để dropdown Phòng ban luôn hiển thị đủ, không phụ thuộc tài sản có đang gắn phòng hay không
+DEFAULT_DEPARTMENTS = [
+    "Phòng Hành Chính",
+    "Phòng Kỹ Thuật",
+    "Phòng IT",
+    "Phòng Thiết Kế",
+    "Phòng Kế Toán",
+    "Phòng Nhân Sự",
+]
 
 
 # kiểm tra user hiện tại có được xem toàn bộ tài sản hay không
@@ -233,6 +246,48 @@ def aliases_for_type(asset_type):
     return [asset_type]
 
 
+# THÊM: chuẩn hóa danh sách loại tài sản khi filter chọn nhiều
+# hỗ trợ cả dạng list ["laptop", "pc"] và chuỗi "laptop,pc"
+def parse_asset_types_filter(asset_types=None):
+    if not asset_types:
+        return []
+
+    if isinstance(asset_types, (list, tuple, set)):
+        values = asset_types
+    else:
+        values = str(asset_types).split(",")
+
+    clean_values = []
+
+    for value in values:
+        value = str(value or "").strip()
+
+        if value and value != "Tất cả" and value not in clean_values:
+            clean_values.append(value)
+
+    return clean_values
+
+
+# THÊM: lấy toàn bộ alias của nhiều loại tài sản
+# dùng cho filter chọn nhiều loại trong trang tài sản
+def aliases_for_types(asset_types=None):
+    selected_types = parse_asset_types_filter(asset_types)
+
+    if not selected_types:
+        return None
+
+    alias_values = []
+
+    for asset_type in selected_types:
+        values = aliases_for_type(asset_type) or []
+
+        for value in values:
+            if value not in alias_values:
+                alias_values.append(value)
+
+    return alias_values
+
+
 # lấy danh sách các cách viết có thể có của 1 trạng thái
 def aliases_for_status(status):
     if not status or status == "Tất cả":
@@ -354,10 +409,11 @@ def validate_asset_payload(data):
     return errors
 
 
-# tạo query lọc danh sách tài sản theo tìm kiếm, loại, phòng ban và trạng thái
+# tạo query lọc danh sách tài sản theo tìm kiếm, loại, nhiều loại, phòng ban và trạng thái
 def build_asset_query(
     search="",
     asset_type="Tất cả",
+    asset_types=None,
     department="Tất cả",
     status="Tất cả",
 ):
@@ -375,15 +431,43 @@ def build_asset_query(
             ]
         })
 
-    type_values = aliases_for_type(asset_type)
+    # THÊM: ưu tiên lọc nhiều loại nếu frontend gửi types=laptop,pc,...
+    # nếu không có types thì vẫn dùng logic cũ asset_type như trước
+    multi_type_values = aliases_for_types(asset_types)
 
-    if type_values:
+    if multi_type_values:
         conditions.append({
             "$or": [
-                {"type": {"$in": type_values}},
-                {"category": {"$in": type_values}},
+                {
+                    "type": {
+                        "$in": multi_type_values
+                    }
+                },
+                {
+                    "category": {
+                        "$in": multi_type_values
+                    }
+                },
             ]
         })
+    else:
+        type_values = aliases_for_type(asset_type)
+
+        if type_values:
+            conditions.append({
+                "$or": [
+                    {
+                        "type": {
+                            "$in": type_values
+                        }
+                    },
+                    {
+                        "category": {
+                            "$in": type_values
+                        }
+                    },
+                ]
+            })
 
     if department and department != "Tất cả":
         conditions.append({
@@ -445,6 +529,11 @@ def get_asset_filter_counts(current_user=None):
         "all": 0
     }
 
+    # THÊM: nạp đủ phòng ban mặc định vào filter
+    # phòng nào chưa có tài sản vẫn hiển thị với số lượng 0
+    for dept in DEFAULT_DEPARTMENTS:
+        department_counts[dept] = 0
+
     location_counts = {
         "all": 0
     }
@@ -505,6 +594,7 @@ def list_assets(
     per_page=10,
     search="",
     asset_type="Tất cả",
+    asset_types=None,
     department="Tất cả",
     status="Tất cả",
     current_user=None,
@@ -513,10 +603,12 @@ def list_assets(
     page = max(1, int(page))
     per_page = max(1, min(int(per_page), 100))
 
-    # tạo query từ các bộ lọc người dùng chọn
+    # THÊM: hỗ trợ lọc nhiều loại tài sản bằng asset_types
+    # nếu asset_types có dữ liệu thì build_asset_query sẽ ưu tiên lọc nhiều loại
     filter_query = build_asset_query(
         search=search,
         asset_type=asset_type,
+        asset_types=asset_types,
         department=department,
         status=status,
     )
@@ -550,6 +642,8 @@ def list_assets(
     # chuẩn hóa dữ liệu trước khi trả về frontend
     items = [normalize_asset(item) for item in raw_items]
 
+    selected_types = parse_asset_types_filter(asset_types)
+
     return {
         "items": items,
         "pagination": {
@@ -564,6 +658,8 @@ def list_assets(
             "role": current_user.get("role") if current_user else None,
             "user_id": str(current_user.get("_id")) if current_user else None,
             "employee_code": current_user.get("employee_code") if current_user else None,
+            # THÊM: trả thêm danh sách loại đang lọc để frontend / dashboard có thể dùng lại
+            "selected_types": selected_types,
         }
     }
 
@@ -836,8 +932,6 @@ def update_asset(asset_id, data, current_user=None):
         # Vì vậy broken cũng phải hiểu là bảo trì chưa hoàn tất.
         elif new_status in ["broken", "maintenance"]:
             maintenance_action = "maintenance_not_done"
-
-
 
     if maintenance_action:
         notify_staff_after_maintenance_action(
@@ -1114,6 +1208,199 @@ def unassign_asset(asset_id):
     }
 
 
+# tạo điều kiện tìm tất cả tài sản đang gắn với user bị ngưng hoạt động
+# ưu tiên user_id và employee_code để tránh nhầm người trùng tên
+def build_inactive_user_asset_query(user=None, user_id="", employee_code="", email="", full_name=""):
+    user = user or {}
+
+    user_id = str(
+        user.get("_id")
+        or user.get("id")
+        or user.get("user_id")
+        or user_id
+        or ""
+    ).strip()
+
+    employee_code = (
+        user.get("employee_code")
+        or employee_code
+        or ""
+    ).strip()
+
+    email = (
+        user.get("email")
+        or email
+        or ""
+    ).strip()
+
+    full_name = (
+        user.get("full_name")
+        or user.get("name")
+        or full_name
+        or ""
+    ).strip()
+
+    owner_conditions = []
+
+    # tìm theo user_id là chính xác nhất
+    if user_id:
+        owner_conditions.append({
+            "user_id": user_id
+        })
+
+    # tìm theo mã nhân viên để hỗ trợ dữ liệu cũ chưa lưu user_id
+    if employee_code:
+        owner_conditions.append({
+            "employee_code": employee_code
+        })
+
+    # tìm theo email nếu tài sản cũ có lưu email
+    if email:
+        owner_conditions.append({
+            "email": email
+        })
+
+    # chỉ fallback theo tên khi không có user_id / employee_code / email
+    # cách này giúp hạn chế nhầm người nếu công ty có nhân viên trùng tên
+    if not owner_conditions and full_name:
+        owner_conditions.extend([
+            {
+                "receiver": full_name
+            },
+            {
+                "user": full_name
+            },
+        ])
+
+    if not owner_conditions:
+        return None
+
+    return {
+        "$or": owner_conditions
+    }
+
+
+# thu hồi toàn bộ tài sản khi tài khoản user bị ngưng hoạt động
+# hàm này chỉ update thêm trạng thái tài sản, không xóa tài sản và không xóa dữ liệu lịch sử cũ
+def release_assets_when_user_inactive(user=None, user_id="", employee_code="", email="", full_name=""):
+    asset_query = build_inactive_user_asset_query(
+        user=user,
+        user_id=user_id,
+        employee_code=employee_code,
+        email=email,
+        full_name=full_name,
+    )
+
+    if not asset_query:
+        return {
+            "success": False,
+            "message": "Thiếu thông tin người dùng để thu hồi tài sản",
+            "matched_count": 0,
+            "modified_count": 0,
+            "items": [],
+            "status_code": 400,
+        }
+
+    # chỉ lấy những tài sản còn đang gắn thông tin người dùng
+    # nếu tài sản đã trống sẵn thì không cần cập nhật lại
+    assigned_query = {
+        "$and": [
+            asset_query,
+            {
+                "$or": [
+                    {
+                        "user_id": {
+                            "$ne": ""
+                        }
+                    },
+                    {
+                        "employee_code": {
+                            "$ne": ""
+                        }
+                    },
+                    {
+                        "user": {
+                            "$ne": ""
+                        }
+                    },
+                    {
+                        "receiver": {
+                            "$ne": ""
+                        }
+                    },
+                    {
+                        "status": {
+                            "$in": STATUS_ALIASES["using"]
+                        }
+                    },
+                ]
+            },
+        ]
+    }
+
+    assigned_assets = find_assets(
+        query=assigned_query,
+        skip=0,
+        limit=100000,
+        sort_field="_id",
+        sort_order=-1,
+    )
+
+    if not assigned_assets:
+        return {
+            "success": True,
+            "message": "Người dùng không còn tài sản nào cần thu hồi",
+            "matched_count": 0,
+            "modified_count": 0,
+            "items": [],
+            "status_code": 200,
+        }
+
+    now = datetime.utcnow()
+
+    asset_ids = [
+        item.get("_id")
+        for item in assigned_assets
+        if item.get("_id")
+    ]
+
+    # tài khoản ngưng hoạt động thì tài sản quay về trạng thái chưa sử dụng
+    # đồng thời xóa thông tin người đang nhận để tránh hiển thị sai ở trang tài sản
+    update_data = {
+        "user_id": "",
+        "employee_code": "",
+        "user": "",
+        "receiver": "",
+        "department": "",
+        "location": "",
+        "status": "available",
+        "returned_at": now,
+        "updated_at": now,
+    }
+
+    update_query = {
+        "_id": {
+            "$in": asset_ids
+        }
+    }
+
+    result = update_many_assets_by_query(
+        update_query,
+        update_data,
+    )
+
+    updated_assets = find_assets_by_ids(asset_ids)
+
+    return {
+        "success": True,
+        "message": "Đã thu hồi tài sản của tài khoản ngưng hoạt động",
+        "matched_count": result.matched_count,
+        "modified_count": result.modified_count,
+        "items": [normalize_asset(item) for item in updated_assets],
+        "status_code": 200,
+    }
+
+
 # tính phần trăm, nếu tổng bằng 0 thì trả về 0 để tránh lỗi chia cho 0
 def _percent(value, total):
     if not total:
@@ -1300,7 +1587,6 @@ def notify_staff_after_maintenance_action(asset, action, current_user=None):
         return None
 
     recipient_user_id = find_notification_recipient_user_id_from_asset(asset)
-
 
     if not recipient_user_id:
         return None
