@@ -113,6 +113,15 @@ def _get_report_asset_name(report):
     if not report:
         return ""
 
+    asset_names = report.get("asset_names")
+    asset_codes = report.get("asset_codes")
+
+    if isinstance(asset_names, list) and asset_names:
+        return ", ".join([str(item) for item in asset_names if item])
+
+    if isinstance(asset_codes, list) and asset_codes:
+        return ", ".join([str(item) for item in asset_codes if item])
+
     return (
         report.get("asset_name")
         or report.get("asset")
@@ -165,6 +174,11 @@ def _build_report_metadata(report):
         "asset_name": report.get("asset_name"),
         "asset_type": report.get("asset_type"),
         "asset_status": report.get("asset_status"),
+        "assets": report.get("assets"),
+        "asset_ids": report.get("asset_ids"),
+        "asset_codes": report.get("asset_codes"),
+        "asset_names": report.get("asset_names"),
+        "asset_count": report.get("asset_count"),
 
         "department": report.get("department"),
         "location": report.get("location"),
@@ -330,23 +344,45 @@ def _notify_after_approve_report(current_user, approved_report, response, data, 
         asset_action_result = response.get("asset_action_result") or {}
 
         if asset_action_result.get("action") == "assign_to_reporter":
-            asset = asset_action_result.get("asset") or {}
+            assigned_assets = asset_action_result.get("assets") or []
 
-            notify_staff_asset_assigned(
-                recipient_user_id=reporter_user_id,
-                asset_id=(
-                    asset.get("id")
-                    or asset.get("_id")
-                    or approved_report.get("asset_id")
-                    or approved_report.get("asset_code")
-                ),
-                asset_name=(
-                    asset.get("asset_name")
-                    or asset.get("asset")
-                    or approved_report.get("asset_name")
-                ),
-                assigned_by=current_user_id,
-            )
+            if not isinstance(assigned_assets, list):
+                assigned_assets = []
+
+            if not assigned_assets:
+                asset = asset_action_result.get("asset") or {}
+
+                if asset:
+                    assigned_assets = [asset]
+
+            if not assigned_assets:
+                assigned_assets = [{
+                    "id": approved_report.get("asset_id"),
+                    "asset_code": approved_report.get("asset_code"),
+                    "asset_name": approved_report.get("asset_name"),
+                    "asset": approved_report.get("asset_name"),
+                }]
+
+            for asset in assigned_assets:
+                if not isinstance(asset, dict):
+                    continue
+
+                notify_staff_asset_assigned(
+                    recipient_user_id=reporter_user_id,
+                    asset_id=(
+                        asset.get("id")
+                        or asset.get("_id")
+                        or asset.get("asset_id")
+                        or asset.get("asset_code")
+                    ),
+                    asset_name=(
+                        asset.get("asset_name")
+                        or asset.get("asset")
+                        or asset.get("name")
+                        or asset.get("asset_code")
+                    ),
+                    assigned_by=current_user_id,
+                )
 
     except Exception:
         # Không để lỗi notification làm hỏng API chính
@@ -390,7 +426,10 @@ def register_reports_api_routes(app):
     @permission_required("reports", "view")
     def api_get_my_report_asset_options():
         current_user = get_current_user_from_request()
-        response, status_code = get_my_report_asset_options(current_user=current_user)
+        response, status_code = get_my_report_asset_options(
+            current_user=current_user,
+            filters=request.args,
+        )
         return jsonify(response), status_code
 
     # API lấy thống kê tổng quan báo cáo
