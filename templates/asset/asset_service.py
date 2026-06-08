@@ -1,9 +1,14 @@
 # file này chứa phần xử lý chính cho chức năng quản lý tài sản
 # API sẽ gọi các hàm trong file này để tìm, thêm, sửa, xóa và cấp phát tài sản
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 import re
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 
 # dùng users_collection để tìm người dùng khi cấp phát tài sản và tìm người nhận notification
@@ -28,8 +33,10 @@ from .asset_model import (
 
 # import các hàm gửi notification cho nhân viên khi bảo trì hoàn tất / chưa hoàn tất
 from templates.notification.notification_service import (
+    notify_admins,
     notify_staff_asset_maintenance_completed,
     notify_staff_asset_maintenance_not_completed,
+    notify_staff_asset_warranty_expiring,
 )
 
 
@@ -125,6 +132,31 @@ DEFAULT_DEPARTMENTS = [
 ]
 
 
+# số ngày trước khi hết hạn bảo hành thì hệ thống gửi thông báo
+WARRANTY_REMINDER_DAYS_BEFORE = 30
+
+# múi giờ dùng để tính hạn bảo hành theo ngày hiện tại ở Việt Nam
+VIETNAM_TIMEZONE = "Asia/Ho_Chi_Minh"
+
+# mã tài sản tự sinh khi tạo mới nếu frontend không gửi asset_code
+ASSET_CODE_PREFIX = "Assets-"
+ASSET_CODE_DIGITS = 5
+
+
+# lấy thời gian hiện tại theo Việt Nam
+# trả về datetime không kèm timezone để đồng bộ với dữ liệu đang lưu dạng datetime.utcnow()
+def get_vietnam_now():
+    if ZoneInfo:
+        return datetime.now(ZoneInfo(VIETNAM_TIMEZONE)).replace(tzinfo=None)
+
+    return datetime.utcnow() + timedelta(hours=7)
+
+
+# lấy ngày hiện tại theo Việt Nam
+def get_vietnam_today():
+    return get_vietnam_now().date()
+
+
 # kiểm tra user hiện tại có được xem toàn bộ tài sản hay không
 def user_can_view_all_assets(current_user):
     # nếu không có user thì chắc chắn không được xem tất cả
@@ -202,6 +234,28 @@ def serialize_datetime(value):
 
     if isinstance(value, datetime):
         return value.isoformat()
+
+    return value
+
+
+# chuẩn hóa field ngày từ frontend
+# chỉ chấp nhận dạng YYYY-MM-DD, đúng format của input type="date"
+def normalize_date_field(value):
+    if not value:
+        return ""
+
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+
+    value = str(value).strip()
+
+    if not value:
+        return ""
+
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
 
     return value
 
@@ -330,6 +384,8 @@ def normalize_asset(item):
     row["location"] = row.get("location") or ""
     row["asset_code"] = row.get("asset_code") or ""
     row["warranty"] = row.get("warranty") or ""
+    row["warranty_reminder_sent"] = bool(row.get("warranty_reminder_sent"))
+    row["warranty_reminder_sent_at"] = serialize_datetime(row.get("warranty_reminder_sent_at"))
     row["spec"] = row.get("spec") or row.get("notes") or ""
     row["notes"] = row.get("notes") or row.get("spec") or ""
 
@@ -342,6 +398,47 @@ def normalize_asset(item):
     row.pop("_id", None)
 
     return row
+
+
+# tự sinh mã tài sản dạng Assets-00001, Assets-00002, ...
+def generate_asset_code(reserved_codes=None):
+    reserved_codes = set(reserved_codes or [])
+
+    pattern = f"^{re.escape(ASSET_CODE_PREFIX)}[0-9]{{{ASSET_CODE_DIGITS}}}$"
+
+    latest_assets = find_assets(
+        query={
+            "asset_code": {
+                "$regex": pattern
+            }
+        },
+        skip=0,
+        limit=1,
+        sort_field="asset_code",
+        sort_order=-1,
+    )
+
+    latest_number = 0
+
+    for asset in latest_assets:
+        asset_code = asset.get("asset_code") or ""
+        number_text = asset_code.replace(ASSET_CODE_PREFIX, "", 1)
+
+        if number_text.isdigit():
+            latest_number = int(number_text)
+
+    max_number = int("9" * ASSET_CODE_DIGITS)
+
+    for number in range(latest_number + 1, max_number + 1):
+        asset_code = f"{ASSET_CODE_PREFIX}{number:0{ASSET_CODE_DIGITS}d}"
+
+        if asset_code in reserved_codes:
+            continue
+
+        if not asset_code_exists(asset_code):
+            return asset_code
+
+    raise ValueError("Không thể sinh mã tài sản mới")
 
 
 # chuẩn hóa dữ liệu tài sản frontend gửi lên trước khi lưu database
@@ -374,7 +471,9 @@ def normalize_asset_payload(data):
     data["department"] = data.get("department") or ""
     data["location"] = data.get("location") or ""
 
-    data["warranty"] = data.get("warranty") or ""
+    data["warranty"] = normalize_date_field(data.get("warranty"))
+    data["warranty_reminder_sent"] = bool(data.get("warranty_reminder_sent", False))
+    data["warranty_reminder_sent_at"] = data.get("warranty_reminder_sent_at") or ""
     data["spec"] = data.get("spec") or data.get("notes") or ""
     data["notes"] = data.get("notes") or data.get("spec") or ""
 
@@ -405,6 +504,9 @@ def validate_asset_payload(data):
 
     if not data.get("status"):
         errors["status"] = "Trạng thái là bắt buộc"
+
+    if data.get("warranty") is None:
+        errors["warranty"] = "Ngày bảo hành phải đúng định dạng YYYY-MM-DD"
 
     return errors
 
@@ -696,10 +798,21 @@ def delete_asset(asset_id):
 
 
 # thêm mới 1 tài sản
-# có chuẩn hóa dữ liệu, validate và kiểm tra trùng mã tài sản
+# có chuẩn hóa dữ liệu, tự sinh mã tài sản, validate và kiểm tra trùng mã tài sản
 def add_asset(data):
-    # chuẩn hóa rồi kiểm tra dữ liệu trước khi thêm
     data = normalize_asset_payload(data)
+
+    # Nếu frontend không gửi mã tài sản thì backend tự sinh dạng Assets-00001.
+    if not data.get("asset_code"):
+        try:
+            data["asset_code"] = generate_asset_code()
+        except ValueError as error:
+            return {
+                "created": False,
+                "message": str(error),
+                "status_code": 500,
+            }
+
     errors = validate_asset_payload(data)
 
     if errors:
@@ -710,7 +823,6 @@ def add_asset(data):
             "status_code": 400,
         }
 
-    # không cho thêm nếu mã tài sản đã tồn tại
     if asset_code_exists(data["asset_code"]):
         return {
             "created": False,
@@ -718,15 +830,23 @@ def add_asset(data):
             "status_code": 409,
         }
 
-    # thêm vào database rồi lấy lại item vừa tạo
     result = insert_asset(data)
     created_item = find_asset_by_query({
         "_id": result.inserted_id
     })
 
+    warranty_notification = safe_notify_asset_warranty_if_expiring_soon(
+        asset=created_item,
+        current_user=None,
+        notify_owner=True,
+    )
+
     return {
         "created": True,
+        "message": "Tạo tài sản thành công",
         "item": normalize_asset(created_item),
+        "warranty_notification": warranty_notification,
+        "status_code": 201,
     }
 
 
@@ -792,9 +912,21 @@ def build_update_asset_data(data):
 
         update_data["status"] = normalize_status_code(raw_status)
 
+    # cập nhật ngày bảo hành, chỉ nhận dạng YYYY-MM-DD
+    if "warranty" in data:
+        warranty = normalize_date_field(data.get("warranty"))
+
+        if warranty is None:
+            return None, {
+                "warranty": "Ngày bảo hành phải đúng định dạng YYYY-MM-DD"
+            }
+
+        update_data["warranty"] = warranty
+        update_data["warranty_reminder_sent"] = False
+        update_data["warranty_reminder_sent_at"] = ""
+
     # các field này không bắt buộc, có thì cập nhật, không có thì bỏ qua
     optional_text_fields = [
-        "warranty",
         "spec",
         "notes",
         "department",
@@ -940,10 +1072,22 @@ def update_asset(asset_id, data, current_user=None):
             current_user=current_user
         )
 
+    warranty_notification = None
+
+    # nếu vừa sửa ngày bảo hành và ngày đó nằm trong khoảng từ hôm nay đến 30 ngày tới
+    # thì gửi notification ngay, không cần chờ job quét định kỳ
+    if "warranty" in update_data:
+        warranty_notification = safe_notify_asset_warranty_if_expiring_soon(
+            asset=updated_asset,
+            current_user=current_user,
+            notify_owner=True,
+        )
+
     return {
         "success": True,
         "message": "Cập nhật tài sản thành công",
         "item": normalized_asset,
+        "warranty_notification": warranty_notification,
         "status_code": 200,
     }
 
@@ -968,13 +1112,10 @@ def add_many_assets(items):
             "status_code": 400,
         }
 
-    # normalized_items là danh sách hợp lệ sẽ được thêm
-    # skipped_items là danh sách bị bỏ qua kèm lý do
     normalized_items = []
     skipped_items = []
     seen_asset_codes = set()
 
-    # kiểm tra từng dòng dữ liệu trong danh sách upload
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             skipped_items.append({
@@ -984,6 +1125,20 @@ def add_many_assets(items):
             continue
 
         normalized = normalize_asset_payload(item)
+
+        # Nếu file import không có mã tài sản thì tự sinh mã dạng Assets-00001.
+        if not normalized.get("asset_code"):
+            try:
+                normalized["asset_code"] = generate_asset_code(
+                    reserved_codes=seen_asset_codes
+                )
+            except ValueError as error:
+                skipped_items.append({
+                    "index": index,
+                    "reason": str(error),
+                })
+                continue
+
         errors = validate_asset_payload(normalized)
 
         if errors:
@@ -997,7 +1152,6 @@ def add_many_assets(items):
 
         asset_code = normalized.get("asset_code")
 
-        # kiểm tra trùng mã ngay trong chính file upload
         if asset_code in seen_asset_codes:
             skipped_items.append({
                 "index": index,
@@ -1006,7 +1160,6 @@ def add_many_assets(items):
             })
             continue
 
-        # kiểm tra mã tài sản đã tồn tại trong database hay chưa
         if asset_code_exists(asset_code):
             skipped_items.append({
                 "index": index,
@@ -1027,9 +1180,20 @@ def add_many_assets(items):
             "status_code": 400,
         }
 
-    # thêm các item hợp lệ vào database
     result = insert_many_assets(normalized_items)
     created_items = find_assets_by_ids(result.inserted_ids)
+
+    warranty_notifications = []
+
+    for created_item in created_items:
+        warranty_notification = safe_notify_asset_warranty_if_expiring_soon(
+            asset=created_item,
+            current_user=None,
+            notify_owner=True,
+        )
+
+        if warranty_notification and warranty_notification.get("notified"):
+            warranty_notifications.append(warranty_notification)
 
     return {
         "created": True,
@@ -1038,6 +1202,7 @@ def add_many_assets(items):
         "ids": [str(item_id) for item_id in result.inserted_ids],
         "items": [normalize_asset(item) for item in created_items],
         "skipped_items": skipped_items,
+        "warranty_notifications": warranty_notifications,
     }
 
 
@@ -1617,6 +1782,338 @@ def notify_staff_after_maintenance_action(asset, action, current_user=None):
         )
 
     return None
+
+# lấy thông tin cơ bản của tài sản để đưa vào notification bảo hành
+def build_warranty_notification_asset_data(asset):
+    asset = asset or {}
+
+    asset_id = asset.get("_id") or asset.get("id") or asset.get("asset_code")
+    asset_code = asset.get("asset_code") or ""
+    asset_name = (
+        asset.get("asset_name")
+        or asset.get("asset")
+        or asset_code
+        or "tài sản"
+    )
+    warranty_date = asset.get("warranty") or ""
+
+    owner_name = (
+        asset.get("receiver")
+        or asset.get("user")
+        or asset.get("employee_code")
+        or ""
+    )
+
+    return {
+        "asset_id": str(asset_id) if asset_id else None,
+        "asset_code": asset_code,
+        "asset_name": asset_name,
+        "warranty_date": warranty_date,
+        "owner_name": owner_name,
+    }
+
+
+# đổi ngày bảo hành dạng YYYY-MM-DD thành date để so sánh
+def parse_warranty_date(value):
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value.date()
+
+    value = str(value).strip()
+
+    if not value:
+        return None
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+# kiểm tra ngày bảo hành có nằm từ hôm nay đến N ngày tới theo giờ Việt Nam hay không
+def is_asset_warranty_expiring_soon(asset, days_before=WARRANTY_REMINDER_DAYS_BEFORE):
+    try:
+        days_before = int(days_before)
+    except (TypeError, ValueError):
+        days_before = WARRANTY_REMINDER_DAYS_BEFORE
+
+    days_before = max(1, min(days_before, 365))
+
+    warranty_date = parse_warranty_date((asset or {}).get("warranty"))
+
+    if not warranty_date:
+        return False
+
+    today = get_vietnam_today()
+    target_date = today + timedelta(days=days_before)
+
+    return today <= warranty_date <= target_date
+
+
+# gửi notification bảo hành cho toàn bộ ADMIN
+# không cần tài sản phải có user_id / employee_code / receiver
+def notify_admins_after_warranty_expiring(asset, current_user=None):
+    if not asset:
+        return []
+
+    data = build_warranty_notification_asset_data(asset)
+    actor_id = get_current_actor_id(current_user)
+
+    message = (
+        f"Tài sản {data['asset_name']} "
+        f"sẽ hết hạn bảo hành vào ngày {data['warranty_date']}."
+    )
+
+    if data.get("asset_code"):
+        message += f" Mã tài sản: {data['asset_code']}."
+
+    if data.get("owner_name"):
+        message += f" Người đang sở hữu: {data['owner_name']}."
+
+    return notify_admins(
+        title="Tài sản sắp hết hạn bảo hành",
+        message=message,
+        notification_type="asset_warranty_expiring_admin",
+        data={
+            "asset_id": data.get("asset_id"),
+            "asset_code": data.get("asset_code"),
+            "asset_name": data.get("asset_name"),
+            "warranty_date": data.get("warranty_date"),
+            "owner_name": data.get("owner_name"),
+            "status": "warranty_expiring",
+            "visible_for_roles": ["ADMIN"],
+        },
+        created_by=actor_id,
+    )
+
+
+# gửi thêm notification cho người đang sở hữu tài sản nếu tìm được user
+# phần này chỉ là bổ sung, không ảnh hưởng việc báo cho ADMIN
+def notify_owner_after_warranty_expiring(asset, current_user=None):
+    if not asset:
+        return None
+
+    recipient_user_id = find_notification_recipient_user_id_from_asset(asset)
+
+    if not recipient_user_id:
+        return None
+
+    data = build_warranty_notification_asset_data(asset)
+
+    return notify_staff_asset_warranty_expiring(
+        recipient_user_id=recipient_user_id,
+        asset_id=data.get("asset_id"),
+        asset_name=data.get("asset_name"),
+        warranty_date=data.get("warranty_date"),
+        created_by=get_current_actor_id(current_user),
+    )
+
+
+# gửi notification cho 1 tài sản nếu ngày bảo hành còn từ hôm nay đến N ngày tới theo giờ Việt Nam
+# hàm này dùng cho cả tạo mới, cập nhật và job quét toàn bộ
+def notify_asset_warranty_if_expiring_soon(
+    asset,
+    current_user=None,
+    days_before=WARRANTY_REMINDER_DAYS_BEFORE,
+    notify_owner=True,
+    force=False,
+):
+    if not asset:
+        return {
+            "notified": False,
+            "reason": "Không có dữ liệu tài sản",
+        }
+
+    if not asset.get("_id"):
+        return {
+            "notified": False,
+            "asset_code": asset.get("asset_code") or "",
+            "reason": "Thiếu _id tài sản",
+        }
+
+    if asset.get("warranty_reminder_sent") is True and not force:
+        return {
+            "notified": False,
+            "asset_id": str(asset.get("_id")),
+            "asset_code": asset.get("asset_code") or "",
+            "reason": "Tài sản đã gửi notification bảo hành trước đó",
+        }
+
+    if not is_asset_warranty_expiring_soon(asset, days_before=days_before):
+        return {
+            "notified": False,
+            "asset_id": str(asset.get("_id")),
+            "asset_code": asset.get("asset_code") or "",
+            "warranty": asset.get("warranty") or "",
+            "reason": "Ngày bảo hành không nằm trong khoảng cần thông báo",
+        }
+
+    asset_data = build_warranty_notification_asset_data(asset)
+
+    admin_notifications = notify_admins_after_warranty_expiring(
+        asset=asset,
+        current_user=current_user,
+    )
+
+    if not admin_notifications:
+        return {
+            "notified": False,
+            "asset_id": str(asset.get("_id")),
+            "asset_code": asset_data.get("asset_code") or "",
+            "asset_name": asset_data.get("asset_name") or "",
+            "warranty": asset_data.get("warranty_date") or "",
+            "reason": "Không tìm thấy ADMIN để nhận notification",
+        }
+
+    owner_notification = None
+
+    if notify_owner:
+        owner_notification = notify_owner_after_warranty_expiring(
+            asset=asset,
+            current_user=current_user,
+        )
+
+    now = get_vietnam_now()
+
+    update_asset_by_query(
+        {
+            "_id": asset.get("_id")
+        },
+        {
+            "warranty_reminder_sent": True,
+            "warranty_reminder_sent_at": now,
+            "updated_at": now,
+        }
+    )
+
+    return {
+        "notified": True,
+        "asset_id": str(asset.get("_id")),
+        "asset_code": asset_data.get("asset_code") or "",
+        "asset_name": asset_data.get("asset_name") or "",
+        "warranty": asset_data.get("warranty_date") or "",
+        "owner_name": asset_data.get("owner_name") or "",
+        "admin_notification_count": len(admin_notifications),
+        "owner_notified": owner_notification is not None,
+    }
+
+
+# gọi notification bảo hành an toàn để lỗi notification không làm fail API tạo/sửa tài sản
+def safe_notify_asset_warranty_if_expiring_soon(
+    asset,
+    current_user=None,
+    days_before=WARRANTY_REMINDER_DAYS_BEFORE,
+    notify_owner=True,
+    force=False,
+):
+    try:
+        return notify_asset_warranty_if_expiring_soon(
+            asset=asset,
+            current_user=current_user,
+            days_before=days_before,
+            notify_owner=notify_owner,
+            force=force,
+        )
+    except Exception as error:
+        return {
+            "notified": False,
+            "asset_id": str((asset or {}).get("_id") or ""),
+            "asset_code": (asset or {}).get("asset_code") or "",
+            "reason": "Gửi notification bảo hành bị lỗi nhưng tài sản vẫn được tạo/cập nhật thành công",
+            "error": str(error),
+        }
+
+
+# kiểm tra tất cả tài sản còn tối đa 30 ngày nữa hết bảo hành theo ngày hiện tại Việt Nam
+# quét cả tài sản mới tạo và tài sản đang có sẵn trong hệ thống
+# mặc định luôn gửi cho toàn bộ ADMIN, có thể gửi thêm cho người đang sở hữu bằng notify_owner=True
+def check_assets_warranty_expiring_soon(
+    current_user=None,
+    days_before=WARRANTY_REMINDER_DAYS_BEFORE,
+    notify_owner=True,
+):
+    try:
+        days_before = int(days_before)
+    except (TypeError, ValueError):
+        days_before = WARRANTY_REMINDER_DAYS_BEFORE
+
+    days_before = max(1, min(days_before, 365))
+
+    today = get_vietnam_today()
+    target_date = today + timedelta(days=days_before)
+
+    today_text = today.strftime("%Y-%m-%d")
+    target_text = target_date.strftime("%Y-%m-%d")
+
+    query = {
+        "$and": [
+            {
+                "warranty": {
+                    "$gte": today_text,
+                    "$lte": target_text
+                }
+            },
+            {
+                "warranty": {
+                    "$ne": ""
+                }
+            },
+            {
+                "warranty_reminder_sent": {
+                    "$ne": True
+                }
+            },
+        ]
+    }
+
+    assets = find_assets(
+        query=query,
+        skip=0,
+        limit=100000,
+        sort_field="warranty",
+        sort_order=1,
+    )
+
+    notified_items = []
+    skipped_items = []
+    admin_notified_count = 0
+    owner_notified_count = 0
+
+    for asset in assets:
+        result = notify_asset_warranty_if_expiring_soon(
+            asset=asset,
+            current_user=current_user,
+            days_before=days_before,
+            notify_owner=notify_owner,
+        )
+
+        if result.get("notified"):
+            notified_items.append(result)
+            admin_notified_count += result.get("admin_notification_count", 0)
+
+            if result.get("owner_notified"):
+                owner_notified_count += 1
+        else:
+            skipped_items.append(result)
+
+    return {
+        "success": True,
+        "message": "Đã quét tất cả tài sản sắp hết hạn bảo hành",
+        "timezone": VIETNAM_TIMEZONE,
+        "from_date": today_text,
+        "to_date": target_text,
+        "days_before": days_before,
+        "notify_owner": bool(notify_owner),
+        "asset_notified_count": len(notified_items),
+        "admin_notified_count": admin_notified_count,
+        "owner_notified_count": owner_notified_count,
+        "skipped_count": len(skipped_items),
+        "notified_items": notified_items,
+        "skipped_items": skipped_items,
+        "status_code": 200,
+    }
 
 
 # đổi trạng thái tài sản theo action đã được cấu hình sẵn

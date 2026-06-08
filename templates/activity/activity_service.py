@@ -1,4 +1,3 @@
-# File: activity_service.py
 # File này xử lý logic chính cho lịch sử hoạt động:
 # - Tạo log hoạt động
 # - Lọc danh sách hoạt động
@@ -10,6 +9,7 @@
 from bson import ObjectId
 from pymongo import DESCENDING
 import unicodedata
+import re
 from io import BytesIO
 from datetime import datetime, timedelta, time, timezone
 from zoneinfo import ZoneInfo
@@ -668,6 +668,41 @@ def build_permission_query(current_user, args):
     return query, None, None
 
 
+# Chuẩn hóa keyword tìm kiếm hoạt động
+# Nếu người dùng nhập ACT-xxxxxx thì lấy phần xxxxxx để tìm theo đuôi ObjectId
+def normalize_activity_keyword(value):
+    text = str(value or "").strip()
+
+    if not text:
+        return ""
+
+    if text.upper().startswith("ACT-"):
+        return text[4:].strip()
+
+    return text
+
+
+# Tạo điều kiện regex trên field có thể là ObjectId bằng cách ép sang string
+# Dùng để search được _id, user_id, target_id theo một phần id như ABC123
+def make_to_string_regex_condition(field, pattern):
+    return {
+        "$expr": {
+            "$regexMatch": {
+                "input": {
+                    "$toString": {
+                        "$ifNull": [
+                            f"${field}",
+                            ""
+                        ]
+                    }
+                },
+                "regex": pattern,
+                "options": "i"
+            }
+        }
+    }
+
+
 # Tạo query chính để lọc danh sách hoạt động từ request args
 def build_activity_query(args, current_user):
     permission_query, error_response, error_status = build_permission_query(
@@ -740,18 +775,50 @@ def build_activity_query(args, current_user):
         extra_conditions.append(time_condition)
 
     if keyword:
-        extra_conditions.append({
-            "$or": [
-                {"employee_code": {"$regex": keyword, "$options": "i"}},
-                {"full_name": {"$regex": keyword, "$options": "i"}},
-                {"email": {"$regex": keyword, "$options": "i"}},
-                {"role": {"$regex": keyword, "$options": "i"}},
-                {"action": {"$regex": keyword, "$options": "i"}},
-                {"module": {"$regex": keyword, "$options": "i"}},
-                {"target_name": {"$regex": keyword, "$options": "i"}},
-                {"path": {"$regex": keyword, "$options": "i"}},
+        keyword = normalize_activity_keyword(keyword)
+
+        if keyword:
+            keyword_pattern = re.escape(keyword)
+
+            keyword_conditions = [
+                {"employee_code": {"$regex": keyword_pattern, "$options": "i"}},
+                {"full_name": {"$regex": keyword_pattern, "$options": "i"}},
+                {"email": {"$regex": keyword_pattern, "$options": "i"}},
+                {"role": {"$regex": keyword_pattern, "$options": "i"}},
+                {"action": {"$regex": keyword_pattern, "$options": "i"}},
+                {"module": {"$regex": keyword_pattern, "$options": "i"}},
+                {"target_name": {"$regex": keyword_pattern, "$options": "i"}},
+                {"path": {"$regex": keyword_pattern, "$options": "i"}},
+
+                {"activity_code": {"$regex": keyword_pattern, "$options": "i"}},
+                {"code": {"$regex": keyword_pattern, "$options": "i"}},
+                {"log_code": {"$regex": keyword_pattern, "$options": "i"}},
+
+                {"target_id": {"$regex": keyword_pattern, "$options": "i"}},
+                {"metadata.target_id": {"$regex": keyword_pattern, "$options": "i"}},
+                {"metadata.id": {"$regex": keyword_pattern, "$options": "i"}},
+
+                make_to_string_regex_condition("_id", keyword_pattern),
+                make_to_string_regex_condition("user_id", keyword_pattern),
+                make_to_string_regex_condition("target_id", keyword_pattern),
+                make_to_string_regex_condition("metadata.target_id", keyword_pattern),
+                make_to_string_regex_condition("metadata.id", keyword_pattern),
             ]
-        })
+
+            if is_valid_object_id(keyword):
+                keyword_object_id = ObjectId(keyword)
+
+                keyword_conditions.extend([
+                    {"_id": keyword_object_id},
+                    {"user_id": keyword_object_id},
+                    {"target_id": keyword_object_id},
+                    {"metadata.target_id": keyword_object_id},
+                    {"metadata.id": keyword_object_id},
+                ])
+
+            extra_conditions.append({
+                "$or": keyword_conditions
+            })
 
     for condition in extra_conditions:
         query = merge_query(query, condition)

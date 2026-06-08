@@ -709,3 +709,27 @@ def notify_asset_unassigned_by_user(actor_user, asset, old_receiver=None):
         },
         created_by=actor_id,
     )
+# Thông báo cho nhân viên khi tài sản sắp hết hạn bảo hành
+def notify_staff_asset_warranty_expiring(
+    recipient_user_id,
+    asset_id=None,
+    asset_name=None,
+    warranty_date=None,
+    created_by=None
+):
+    name = asset_name or "tài sản"
+    date_text = warranty_date or "sắp tới"
+
+    return send_notification(
+        recipient_user_id=recipient_user_id,
+        title="Tài sản sắp hết hạn bảo hành",
+        message=f"Tài sản {name} sẽ hết hạn bảo hành vào ngày {date_text}.",
+        notification_type="asset_warranty_expiring",
+        data={
+            "asset_id": str(asset_id) if asset_id else None,
+            "asset_name": asset_name,
+            "warranty_date": warranty_date,
+            "status": "warranty_expiring"
+        },
+        created_by=created_by
+    )
