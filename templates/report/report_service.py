@@ -1321,7 +1321,7 @@ def get_report_options(current_user=None):
 
 
 # Lấy danh sách tài sản để tạo báo cáo.
-# - Báo hỏng: lấy tài sản đang sử dụng của chính nhân viên.
+# - Báo hỏng: lấy tài sản đang sử dụng của chính nhân viên, có phân trang.
 # - Cần cấp mới: lấy toàn bộ tài sản Chưa sử dụng, phân trang mặc định 10 item.
 def get_my_report_asset_options(current_user=None, filters=None):
     filters = filters or {}
@@ -1333,6 +1333,21 @@ def get_my_report_asset_options(current_user=None, filters=None):
             current_user=current_user,
         )
 
+    page = _safe_positive_int(
+        _value(filters, "page", default=1),
+        default=1,
+        min_value=1,
+    )
+
+    limit = _safe_positive_int(
+        _value(filters, "limit", "per_page", default=REPORT_ASSET_OPTION_DEFAULT_LIMIT),
+        default=REPORT_ASSET_OPTION_DEFAULT_LIMIT,
+        min_value=1,
+        max_value=REPORT_ASSET_OPTION_DEFAULT_LIMIT,
+    )
+
+    search = _value(filters, "search", "q", "keyword", default="")
+
     if not current_user:
         return {
             "success": True,
@@ -1342,8 +1357,8 @@ def get_my_report_asset_options(current_user=None, filters=None):
             "data": [],
             "pagination": {
                 "page": 1,
-                "per_page": REPORT_ASSET_OPTION_DEFAULT_LIMIT,
-                "limit": REPORT_ASSET_OPTION_DEFAULT_LIMIT,
+                "per_page": limit,
+                "limit": limit,
                 "total_items": 0,
                 "total_pages": 1,
             },
@@ -1381,24 +1396,38 @@ def get_my_report_asset_options(current_user=None, filters=None):
             "data": [],
             "pagination": {
                 "page": 1,
-                "per_page": REPORT_ASSET_OPTION_DEFAULT_LIMIT,
-                "limit": REPORT_ASSET_OPTION_DEFAULT_LIMIT,
+                "per_page": limit,
+                "limit": limit,
                 "total_items": 0,
                 "total_pages": 1,
             },
         }, 200
 
-    query = {
-        "$and": [
-            {
-                "$or": owner_conditions
-            },
-            {
-                "status": {
-                    "$in": USING_STATUS_VALUES
-                }
+    conditions = [
+        {
+            "$or": owner_conditions
+        },
+        {
+            "status": {
+                "$in": USING_STATUS_VALUES
             }
-        ]
+        }
+    ]
+
+    search = str(search or "").strip()
+
+    if search:
+        safe_search = re.escape(search)
+        conditions.append({
+            "$or": [
+                {"asset_code": {"$regex": safe_search, "$options": "i"}},
+                {"asset_name": {"$regex": safe_search, "$options": "i"}},
+                {"asset": {"$regex": safe_search, "$options": "i"}},
+            ]
+        })
+
+    query = {
+        "$and": conditions
     }
 
     raw_assets = find_assets(
@@ -1409,7 +1438,7 @@ def get_my_report_asset_options(current_user=None, filters=None):
         sort_order=-1,
     )
 
-    items = []
+    all_items = []
 
     for raw_asset in raw_assets:
         asset = normalize_asset(raw_asset)
@@ -1423,7 +1452,17 @@ def get_my_report_asset_options(current_user=None, filters=None):
         if _asset_has_locked_report(asset, current_user=current_user):
             continue
 
-        items.append(_serialize_asset_option(asset))
+        all_items.append(_serialize_asset_option(asset))
+
+    total_items = len(all_items)
+    total_pages = math.ceil(total_items / limit) if total_items > 0 else 1
+
+    if page > total_pages:
+        page = total_pages
+
+    start = (page - 1) * limit
+    end = start + limit
+    items = all_items[start:end]
 
     return {
         "success": True,
@@ -1432,11 +1471,11 @@ def get_my_report_asset_options(current_user=None, filters=None):
         "assets": items,
         "data": items,
         "pagination": {
-            "page": 1,
-            "per_page": len(items),
-            "limit": len(items),
-            "total_items": len(items),
-            "total_pages": 1,
+            "page": page,
+            "per_page": limit,
+            "limit": limit,
+            "total_items": total_items,
+            "total_pages": total_pages,
         },
     }, 200
 
