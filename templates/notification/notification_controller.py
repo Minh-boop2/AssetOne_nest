@@ -6,12 +6,13 @@ from flask import request, jsonify
 from templates.notification.notification_service import (
     init_notification_socket,
     send_notification,
+    send_notification_to_users,
+    send_notification_to_roles,
     get_user_notifications,
     get_unread_count,
     mark_notification_read,
     mark_all_notifications_read,
     remove_notification
- 
 )
 
 
@@ -48,6 +49,17 @@ def _get_user_id_from_request():
         or request.args.get("user_id")
         or ""
     )
+
+
+# Chuẩn hóa list gửi từ request
+def _get_list_value(value):
+    if not value:
+        return []
+
+    if isinstance(value, list):
+        return value
+
+    return [value]
 
 
 # Đăng ký toàn bộ API route liên quan đến notification
@@ -143,16 +155,27 @@ def register_notifications_api_routes(app, socketio=None):
             or data.get("to_user_id")
         )
 
+        recipient_user_ids = _get_list_value(
+            data.get("recipient_user_ids")
+            or data.get("user_ids")
+            or data.get("to_user_ids")
+        )
+
+        audience_roles = _get_list_value(
+            data.get("audience_roles")
+            or data.get("roles")
+        )
+
         title = data.get("title")
         message = data.get("message")
         notification_type = data.get("type", "info")
         extra_data = data.get("data", {})
         created_by = data.get("created_by") or request.headers.get("X-User-Id")
 
-        if not recipient_user_id:
+        if not recipient_user_id and not recipient_user_ids and not audience_roles:
             return jsonify({
                 "success": False,
-                "message": "recipient_user_id is required"
+                "message": "recipient_user_id, recipient_user_ids hoặc audience_roles is required"
             }), 400
 
         if not title:
@@ -167,15 +190,40 @@ def register_notifications_api_routes(app, socketio=None):
                 "message": "message is required"
             }), 400
 
-        notification = send_notification(
-            recipient_user_id=recipient_user_id,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-            data=extra_data,
-            created_by=created_by,
-            realtime=True
-        )
+        if audience_roles:
+            notification = send_notification_to_roles(
+                roles=audience_roles,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                data=extra_data,
+                created_by=created_by
+            )
+        elif recipient_user_ids:
+            notification = send_notification_to_users(
+                users=[
+                    {
+                        "id": user_id
+                    }
+                    for user_id in recipient_user_ids
+                    if user_id
+                ],
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                data=extra_data,
+                created_by=created_by
+            )
+        else:
+            notification = send_notification(
+                recipient_user_id=recipient_user_id,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                data=extra_data,
+                created_by=created_by,
+                realtime=True
+            )
 
         return jsonify({
             "success": True,

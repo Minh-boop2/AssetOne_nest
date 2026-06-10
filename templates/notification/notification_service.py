@@ -5,6 +5,7 @@ from flask_socketio import join_room, leave_room, emit
 
 from templates.notification.notification_model import (
     create_notification,
+    create_shared_notification,
     get_notifications_by_user,
     count_unread_notifications,
     mark_notification_as_read,
@@ -13,6 +14,7 @@ from templates.notification.notification_model import (
 )
 
 from templates.user.user_service import (
+    get_user_by_id,
     get_admin_and_manager_users,
     get_admin_users,
     get_manager_users
@@ -27,6 +29,88 @@ _socket_initialized = False
 # Mỗi user sẽ nhận notification trong phòng riêng của mình
 def get_user_notification_room(user_id):
     return f"notifications:user:{str(user_id)}"
+
+
+# Lấy role hiện tại của user để kiểm tra notification dùng chung theo role
+def _get_user_role(user_id):
+    if not user_id:
+        return None
+
+    try:
+        response, status_code = get_user_by_id(str(user_id))
+    except Exception:
+        return None
+
+    if status_code != 200 or not isinstance(response, dict):
+        return None
+
+    user = response.get("data") or response.get("user") or response
+
+    if not isinstance(user, dict):
+        return None
+
+    role = user.get("role")
+
+    if not role:
+        return None
+
+    return str(role).strip().upper()
+
+
+# Lấy id từ user object
+def _get_user_id_from_item(user):
+    if not user:
+        return None
+
+    if isinstance(user, str):
+        return user
+
+    return (
+        user.get("id")
+        or user.get("_id")
+        or user.get("user_id")
+    )
+
+
+# Lấy danh sách user_id không trùng
+def _get_user_ids_from_users(users):
+    users = users or []
+    user_ids = []
+
+    for user in users:
+        user_id = _get_user_id_from_item(user)
+
+        if not user_id:
+            continue
+
+        user_id = str(user_id)
+
+        if user_id not in user_ids:
+            user_ids.append(user_id)
+
+    return user_ids
+
+
+# Chuẩn hóa danh sách role
+def _normalize_roles(roles):
+    if not roles:
+        return []
+
+    if not isinstance(roles, list):
+        roles = [roles]
+
+    result = []
+
+    for role in roles:
+        if role is None:
+            continue
+
+        role = str(role).strip().upper()
+
+        if role and role not in result:
+            result.append(role)
+
+    return result
 
 
 # Khởi tạo socket notification
@@ -59,7 +143,7 @@ def init_notification_socket(socketio):
         emit("notifications:joined", {
             "user_id": str(user_id),
             "room": room,
-            "unread_count": count_unread_notifications(user_id)
+            "unread_count": get_unread_count(user_id)
         })
 
     @socketio.on("leave_notifications")
@@ -133,6 +217,14 @@ def emit_to_user(user_id, event_name, payload):
     )
 
 
+# Gửi realtime notification mới cho một user
+def _emit_new_notification_to_user(user_id, notification):
+    emit_to_user(user_id, "notification:new", {
+        "notification": notification,
+        "unread_count": get_unread_count(user_id)
+    })
+
+
 # Tạo notification mới và gửi realtime nếu được bật
 def send_notification(
     recipient_user_id,
@@ -152,43 +244,49 @@ def send_notification(
         created_by=created_by
     )
 
-    unread_count = count_unread_notifications(recipient_user_id)
-
     if realtime:
-        emit_to_user(recipient_user_id, "notification:new", {
-            "notification": notification,
-            "unread_count": unread_count
-        })
+        _emit_new_notification_to_user(recipient_user_id, notification)
 
     return notification
 
 
 # Lấy danh sách notification của một user từ model
 def get_user_notifications(user_id, limit=50, only_unread=False):
+    user_role = _get_user_role(user_id)
+
     return get_notifications_by_user(
         recipient_user_id=user_id,
         limit=limit,
-        only_unread=only_unread
+        only_unread=only_unread,
+        user_role=user_role
     )
 
 
 # Lấy số lượng notification chưa đọc của một user
 def get_unread_count(user_id):
-    return count_unread_notifications(user_id)
+    user_role = _get_user_role(user_id)
+
+    return count_unread_notifications(
+        recipient_user_id=user_id,
+        user_role=user_role
+    )
 
 
 # Đánh dấu một notification là đã đọc
 # Sau đó bắn realtime để frontend cập nhật lại giao diện
 def mark_notification_read(notification_id, user_id=None):
+    user_role = _get_user_role(user_id)
+
     notification = mark_notification_as_read(
         notification_id=notification_id,
-        recipient_user_id=user_id
+        recipient_user_id=user_id,
+        user_role=user_role
     )
 
     if notification and user_id:
         emit_to_user(user_id, "notification:read", {
             "notification": notification,
-            "unread_count": count_unread_notifications(user_id)
+            "unread_count": get_unread_count(user_id)
         })
 
     return notification
@@ -197,7 +295,12 @@ def mark_notification_read(notification_id, user_id=None):
 # Đánh dấu tất cả notification của user là đã đọc
 # Sau đó báo frontend cập nhật unread_count về 0
 def mark_all_notifications_read(user_id):
-    modified_count = mark_all_notifications_as_read(user_id)
+    user_role = _get_user_role(user_id)
+
+    modified_count = mark_all_notifications_as_read(
+        recipient_user_id=user_id,
+        user_role=user_role
+    )
 
     emit_to_user(user_id, "notifications:read_all", {
         "user_id": str(user_id),
@@ -210,21 +313,25 @@ def mark_all_notifications_read(user_id):
 
 # Xóa notification và gửi realtime báo frontend xóa khỏi danh sách
 def remove_notification(notification_id, user_id=None):
+    user_role = _get_user_role(user_id)
+
     deleted = delete_notification(
         notification_id=notification_id,
-        recipient_user_id=user_id
+        recipient_user_id=user_id,
+        user_role=user_role
     )
 
     if deleted and user_id:
         emit_to_user(user_id, "notification:deleted", {
             "notification_id": str(notification_id),
-            "unread_count": count_unread_notifications(user_id)
+            "unread_count": get_unread_count(user_id)
         })
 
     return deleted
 
 
 # Gửi cùng một notification cho nhiều user
+# Database chỉ tạo 1 document, không tạo 1 document cho từng user nữa
 def send_notification_to_users(
     users,
     title,
@@ -233,26 +340,57 @@ def send_notification_to_users(
     data=None,
     created_by=None
 ):
-    notifications = []
+    user_ids = _get_user_ids_from_users(users)
 
-    for user in users:
-        user_id = user.get("id") or user.get("_id")
+    notification = create_shared_notification(
+        recipient_user_ids=user_ids,
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        data=data,
+        created_by=created_by
+    )
 
-        if not user_id:
-            continue
+    if not notification:
+        return None
 
-        notification = send_notification(
-            recipient_user_id=user_id,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-            data=data,
-            created_by=created_by
-        )
+    for user_id in user_ids:
+        _emit_new_notification_to_user(user_id, notification)
 
-        notifications.append(notification)
+    return notification
 
-    return notifications
+
+# Gửi một notification dùng chung cho nhiều role
+# User nào hiện tại thuộc role phù hợp thì khi lấy danh sách sẽ thấy notification
+def send_notification_to_roles(
+    roles,
+    title,
+    message,
+    notification_type="info",
+    data=None,
+    created_by=None,
+    users=None
+):
+    roles = _normalize_roles(roles)
+    users = users or []
+    user_ids = _get_user_ids_from_users(users)
+
+    notification = create_shared_notification(
+        audience_roles=roles,
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        data=data,
+        created_by=created_by
+    )
+
+    if not notification:
+        return None
+
+    for user_id in user_ids:
+        _emit_new_notification_to_user(user_id, notification)
+
+    return notification
 
 
 # Gửi notification cho toàn bộ ADMIN và QUAN_LY
@@ -265,7 +403,8 @@ def notify_admins_and_managers(
 ):
     users = get_admin_and_manager_users()
 
-    return send_notification_to_users(
+    return send_notification_to_roles(
+        roles=["ADMIN", "QUAN_LY"],
         users=users,
         title=title,
         message=message,
@@ -285,7 +424,8 @@ def notify_admins(
 ):
     users = get_admin_users()
 
-    return send_notification_to_users(
+    return send_notification_to_roles(
+        roles=["ADMIN"],
         users=users,
         title=title,
         message=message,
@@ -305,7 +445,8 @@ def notify_managers(
 ):
     users = get_manager_users()
 
-    return send_notification_to_users(
+    return send_notification_to_roles(
+        roles=["QUAN_LY"],
         users=users,
         title=title,
         message=message,
@@ -709,6 +850,8 @@ def notify_asset_unassigned_by_user(actor_user, asset, old_receiver=None):
         },
         created_by=actor_id,
     )
+
+
 # Thông báo cho nhân viên khi tài sản sắp hết hạn bảo hành
 def notify_staff_asset_warranty_expiring(
     recipient_user_id,
