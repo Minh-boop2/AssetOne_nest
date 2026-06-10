@@ -10,6 +10,7 @@ from templates.report.report_controller import register_reports_api_routes
 from templates.asset.asset_controller import register_assets_api_routes
 from templates.assign.assign_controller import register_assign_api_routes
 from templates.user.user_controller import register_users_api_routes
+from templates.profile.profile_controller import register_profile_api_routes
 from templates.mail.mail_controller import register_mail_api_routes
 from templates.permission.permission_controller import register_permissions_api_routes
 from templates.activity.activity_controller import register_activity_api_routes
@@ -32,6 +33,7 @@ socketio = SocketIO(
 register_assets_api_routes(app)
 register_assign_api_routes(app)
 register_users_api_routes(app)
+register_profile_api_routes(app)
 register_mail_api_routes(app)
 register_permissions_api_routes(app)
 register_reports_api_routes(app)
@@ -47,6 +49,8 @@ def home():
         "assets_api": "/api/assets",
         "assign_api": "/api/assign",
         "users_api": "/api/users",
+        "profile_api": "/api/profile/me",
+        "profile_avatar_api": "/api/profile/avatar",
         "mail_api": "/api/mail",
         "permissions_api": "/api/permissions",
         "reports_api": "/api/reports",

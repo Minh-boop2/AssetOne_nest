@@ -23,8 +23,19 @@ STATUS_LABELS = {
 }
 
 
+# Cấu hình upload avatar
+AVATAR_UPLOAD_SUBDIR = "uploads/avatars"
+ALLOWED_AVATAR_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+MAX_AVATAR_SIZE = 3 * 1024 * 1024
+
+
 # Chuẩn hóa đường dẫn avatar, nếu thiếu thì dùng avatar mặc định
 def normalize_avatar_url(avatar_url):
+    if not avatar_url:
+        return DEFAULT_AVATAR_URL
+
+    avatar_url = str(avatar_url).strip()
+
     if not avatar_url:
         return DEFAULT_AVATAR_URL
 
@@ -32,6 +43,20 @@ def normalize_avatar_url(avatar_url):
         return DEFAULT_AVATAR_URL
 
     return avatar_url
+
+
+# Lấy đuôi file avatar
+def get_avatar_file_extension(filename):
+    if not filename or "." not in filename:
+        return ""
+
+    return filename.rsplit(".", 1)[1].lower().strip()
+
+
+# Kiểm tra file avatar có đúng định dạng cho phép hay không
+def is_allowed_avatar_file(filename):
+    extension = get_avatar_file_extension(filename)
+    return bool(extension and extension in ALLOWED_AVATAR_EXTENSIONS)
 
 
 # Chuyển dữ liệu user trong MongoDB thành object profile trả về frontend

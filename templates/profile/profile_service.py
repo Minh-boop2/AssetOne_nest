@@ -6,15 +6,23 @@
 # - Cập nhật hồ sơ
 # - Đổi mật khẩu
 
+import os
+import uuid
+
 from bson import ObjectId
 from pymongo import DESCENDING
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 from mongo import users_collection, activities_collection, assets_collection
 
 from templates.profile.profile_model import (
     profile_serializer,
     update_profile_model,
+    is_allowed_avatar_file,
+    get_avatar_file_extension,
+    AVATAR_UPLOAD_SUBDIR,
+    MAX_AVATAR_SIZE,
 )
 
 from templates.user.user_model import (
@@ -219,6 +227,55 @@ def build_profile_response_data(user):
     return data
 
 
+# Lấy dung lượng file upload
+def get_uploaded_file_size(file):
+    try:
+        current_position = file.stream.tell()
+        file.stream.seek(0, os.SEEK_END)
+        size = file.stream.tell()
+        file.stream.seek(current_position)
+        return size
+    except Exception:
+        return 0
+
+
+# Tạo đường dẫn lưu avatar và đường dẫn trả về frontend
+def build_avatar_save_info(root_path, user_id, original_filename):
+    extension = get_avatar_file_extension(original_filename)
+    safe_user_id = secure_filename(str(user_id))
+    filename = f"{safe_user_id}_{uuid.uuid4().hex}.{extension}"
+
+    upload_dir = os.path.join(root_path, "static", *AVATAR_UPLOAD_SUBDIR.split("/"))
+    os.makedirs(upload_dir, exist_ok=True)
+
+    save_path = os.path.join(upload_dir, filename)
+    avatar_url = f"/static/{AVATAR_UPLOAD_SUBDIR}/{filename}".replace("\\", "/")
+
+    return save_path, avatar_url
+
+
+# Xóa avatar cũ nếu avatar đó nằm trong thư mục upload của hệ thống
+def delete_old_avatar_file(root_path, avatar_url):
+    if not avatar_url:
+        return
+
+    upload_prefix = f"/static/{AVATAR_UPLOAD_SUBDIR}/"
+
+    if not str(avatar_url).startswith(upload_prefix):
+        return
+
+    try:
+        relative_path = str(avatar_url).lstrip("/").replace("/", os.sep)
+        file_path = os.path.abspath(os.path.join(root_path, relative_path))
+        upload_dir = os.path.abspath(os.path.join(root_path, "static", *AVATAR_UPLOAD_SUBDIR.split("/")))
+
+        if file_path.startswith(upload_dir) and os.path.exists(file_path):
+            os.remove(file_path)
+
+    except Exception:
+        pass
+
+
 # Lấy hồ sơ của người đang đăng nhập
 def get_my_profile(user_id):
     if not user_id:
@@ -305,6 +362,85 @@ def update_my_profile(user_id, data):
     return {
         "success": True,
         "message": "Cập nhật hồ sơ thành công",
+        "data": build_profile_response_data(updated_user)
+    }, 200
+
+
+# Tải lên avatar mới của người đang đăng nhập
+def upload_my_avatar(user_id, file, root_path):
+    if not user_id:
+        return {
+            "success": False,
+            "message": "Thiếu thông tin người dùng đăng nhập"
+        }, 401
+
+    if not is_valid_object_id(user_id):
+        return {
+            "success": False,
+            "message": "ID người dùng không hợp lệ"
+        }, 400
+
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
+
+    if not user:
+        return {
+            "success": False,
+            "message": "Không tìm thấy người dùng"
+        }, 404
+
+    if not file or not file.filename:
+        return {
+            "success": False,
+            "message": "Vui lòng chọn ảnh đại diện"
+        }, 400
+
+    original_filename = secure_filename(file.filename)
+
+    if not is_allowed_avatar_file(original_filename):
+        return {
+            "success": False,
+            "message": "Ảnh đại diện chỉ hỗ trợ png, jpg, jpeg, gif hoặc webp"
+        }, 400
+
+    file_size = get_uploaded_file_size(file)
+
+    if file_size and file_size > MAX_AVATAR_SIZE:
+        return {
+            "success": False,
+            "message": "Ảnh đại diện không được vượt quá 3MB"
+        }, 400
+
+    save_path, avatar_url = build_avatar_save_info(root_path, user_id, original_filename)
+
+    try:
+        file.stream.seek(0)
+        file.save(save_path)
+    except Exception as error:
+        return {
+            "success": False,
+            "message": "Không thể lưu ảnh đại diện",
+            "error": str(error)
+        }, 500
+
+    old_avatar_url = user.get("avatar_url")
+
+    users_collection.update_one(
+        {"_id": ObjectId(user_id)},
+        {
+            "$set": {
+                "avatar_url": avatar_url,
+                "updated_at": now_vietnam()
+            }
+        }
+    )
+
+    updated_user = users_collection.find_one({"_id": ObjectId(user_id)})
+
+    delete_old_avatar_file(root_path, old_avatar_url)
+
+    return {
+        "success": True,
+        "message": "Cập nhật ảnh đại diện thành công",
         "data": build_profile_response_data(updated_user)
     }, 200
 

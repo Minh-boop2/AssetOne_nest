@@ -3,6 +3,8 @@ import re
 from datetime import datetime
 from bson import ObjectId
 
+from mongo import users_collection
+
 # Import các hàm làm việc trực tiếp với collection tài sản.
 # Module assign đang dùng dữ liệu trong assets_collection.
 from .assign_model import (
@@ -56,6 +58,121 @@ FULL_ASSIGN_ROLES = [
     "ADMIN",
     "QUAN_LY",
 ]
+
+
+# Chuẩn hóa đường dẫn avatar user để frontend dễ dùng.
+def normalize_assign_avatar_url(avatar_url):
+    if not avatar_url:
+        return ""
+
+    avatar_url = str(avatar_url).strip()
+
+    if not avatar_url:
+        return ""
+
+    if avatar_url == "/static/imgages/default-avatar.jpg":
+        return ""
+
+    return avatar_url
+
+
+# Tìm user đang được cấp phát tài sản để lấy avatar.
+# Ưu tiên tìm theo user_id, sau đó mã nhân viên, email, rồi tên người nhận.
+def find_assigned_user_for_asset(row):
+    if not row:
+        return None
+
+    user_id = str(row.get("user_id") or "").strip()
+    employee_code = str(row.get("employee_code") or "").strip()
+    email = str(row.get("email") or "").strip()
+    receiver = str(row.get("receiver") or row.get("user") or "").strip()
+
+    conditions = []
+
+    if user_id:
+        if ObjectId.is_valid(user_id):
+            conditions.append({
+                "_id": ObjectId(user_id)
+            })
+
+        conditions.append({
+            "id": user_id
+        })
+
+        conditions.append({
+            "user_id": user_id
+        })
+
+    if employee_code:
+        conditions.append({
+            "employee_code": employee_code
+        })
+
+    if email:
+        conditions.append({
+            "email": email
+        })
+
+    if receiver:
+        conditions.append({
+            "full_name": receiver
+        })
+
+        conditions.append({
+            "name": receiver
+        })
+
+    if not conditions:
+        return None
+
+    return users_collection.find_one({
+        "$or": conditions
+    })
+
+
+# Tạo thông tin user đã gắn vào tài sản để trả về frontend.
+def build_assigned_user_data(row):
+    user_doc = find_assigned_user_for_asset(row)
+
+    receiver_name = row.get("receiver") or row.get("user") or ""
+    receiver_id = row.get("employee_code") or row.get("user_id") or ""
+
+    avatar_url = (
+        row.get("user_avatar_url")
+        or row.get("receiver_avatar_url")
+        or ""
+    )
+
+    if user_doc:
+        receiver_name = (
+            user_doc.get("full_name")
+            or user_doc.get("name")
+            or receiver_name
+        )
+
+        receiver_id = (
+            user_doc.get("employee_code")
+            or receiver_id
+        )
+
+        avatar_url = (
+            user_doc.get("avatar_url")
+            or avatar_url
+        )
+
+    avatar_url = normalize_assign_avatar_url(avatar_url)
+
+    return {
+        "id": str(user_doc.get("_id")) if user_doc else str(row.get("user_id") or ""),
+        "employee_code": receiver_id,
+        "full_name": receiver_name,
+        "name": receiver_name,
+        "email": user_doc.get("email") if user_doc else row.get("email", ""),
+        "phone": user_doc.get("phone") if user_doc else "",
+        "department": user_doc.get("department") if user_doc else row.get("department", ""),
+        "floor": user_doc.get("floor") if user_doc else "",
+        "avatar_url": avatar_url,
+    }
 
 
 # Chuyển datetime thành chuỗi ISO để trả về JSON dễ dùng.
@@ -192,6 +309,11 @@ def normalize_assign_from_asset(item):
     user = row.get("receiver") or row.get("user") or ""
 
     assign_status = map_asset_status_to_assign_status(row.get("status"))
+    assigned_user = build_assigned_user_data(row)
+
+    receiver_name = assigned_user.get("full_name") or user
+    receiver_id = assigned_user.get("employee_code") or row.get("employee_code") or ""
+    receiver_avatar_url = assigned_user.get("avatar_url") or ""
 
     return {
         "id": mongo_id,
@@ -207,14 +329,19 @@ def normalize_assign_from_asset(item):
         "status": assign_status,
         "asset_status": row.get("status") or "",
 
-        "user_id": row.get("user_id") or "",
-        "employee_code": row.get("employee_code") or "",
+        "user_id": row.get("user_id") or assigned_user.get("id") or "",
+        "employee_code": receiver_id,
 
-        "receiver": user,
-        "user": user,
+        "receiver": receiver_name,
+        "user": receiver_name,
 
-        "department": row.get("department") or "",
-        "location": row.get("location") or "",
+        "avatar_url": receiver_avatar_url,
+        "user_avatar_url": receiver_avatar_url,
+        "receiver_avatar_url": receiver_avatar_url,
+        "assigned_user": assigned_user,
+
+        "department": row.get("department") or assigned_user.get("department") or "",
+        "location": row.get("location") or row.get("floor") or assigned_user.get("floor") or "",
 
         "date": serialize_datetime(
             row.get("date")
@@ -566,6 +693,8 @@ def build_update_data_for_assign_status(assign_status):
             "receiver": "",
             "department": "",
             "location": "",
+            "user_avatar_url": "",
+            "receiver_avatar_url": "",
             "returned_at": now,
             "updated_at": now,
         }

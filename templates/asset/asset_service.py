@@ -238,6 +238,113 @@ def serialize_datetime(value):
     return value
 
 
+# chuẩn hóa đường dẫn avatar người dùng đang giữ tài sản
+def normalize_asset_avatar_url(avatar_url):
+    avatar_url = str(avatar_url or "").strip()
+
+    if not avatar_url:
+        return ""
+
+    if avatar_url in [
+        "/static/imgages/default-avatar.jpg",
+        "/static/images/default-avatar.jpg",
+    ]:
+        return ""
+
+    return avatar_url
+
+
+# tìm user đang được gắn với tài sản để lấy avatar mới nhất
+# ưu tiên user_id, sau đó employee_code, email, rồi tên người nhận
+def find_asset_owner_user(asset):
+    asset = asset or {}
+
+    user_id = str(asset.get("user_id") or "").strip()
+    employee_code = str(asset.get("employee_code") or "").strip()
+    email = str(asset.get("email") or "").strip()
+    receiver_name = str(asset.get("receiver") or asset.get("user") or "").strip()
+
+    conditions = []
+
+    if user_id:
+        if ObjectId.is_valid(user_id):
+            conditions.append({
+                "_id": ObjectId(user_id)
+            })
+
+        conditions.append({
+            "id": user_id
+        })
+
+        conditions.append({
+            "user_id": user_id
+        })
+
+    if employee_code:
+        conditions.append({
+            "employee_code": employee_code
+        })
+
+    if email:
+        conditions.append({
+            "email": email
+        })
+
+    if receiver_name:
+        conditions.append({
+            "full_name": receiver_name
+        })
+
+        conditions.append({
+            "name": receiver_name
+        })
+
+    if not conditions:
+        return None
+
+    return users_collection.find_one({
+        "$or": conditions
+    })
+
+
+# tạo object user đang sử dụng tài sản để frontend có thể hiện avatar ở trang detail
+def build_asset_owner_data(asset):
+    asset = asset or {}
+    user = find_asset_owner_user(asset)
+
+    owner_name = asset.get("receiver") or asset.get("user") or ""
+    owner_id = asset.get("employee_code") or asset.get("user_id") or ""
+    owner_department = asset.get("department") or ""
+    owner_floor = asset.get("location") or ""
+    avatar_url = (
+        asset.get("avatar_url")
+        or asset.get("user_avatar_url")
+        or asset.get("receiver_avatar_url")
+        or ""
+    )
+
+    if user:
+        owner_name = user.get("full_name") or user.get("name") or owner_name
+        owner_id = user.get("employee_code") or owner_id
+        owner_department = user.get("department") or owner_department
+        owner_floor = user.get("floor") or owner_floor
+        avatar_url = user.get("avatar_url") or avatar_url
+
+    avatar_url = normalize_asset_avatar_url(avatar_url)
+
+    return {
+        "id": str(user.get("_id")) if user else str(asset.get("user_id") or ""),
+        "employee_code": owner_id,
+        "full_name": owner_name,
+        "name": owner_name,
+        "email": user.get("email") if user else asset.get("email", ""),
+        "phone": user.get("phone") if user else "",
+        "department": owner_department,
+        "floor": owner_floor,
+        "avatar_url": avatar_url,
+    }
+
+
 # chuẩn hóa field ngày từ frontend
 # chỉ chấp nhận dạng YYYY-MM-DD, đúng format của input type="date"
 def normalize_date_field(value):
@@ -389,6 +496,26 @@ def normalize_asset(item):
     row["spec"] = row.get("spec") or row.get("notes") or ""
     row["notes"] = row.get("notes") or row.get("spec") or ""
 
+    assigned_user = build_asset_owner_data(row)
+
+    row["assigned_user"] = assigned_user
+    row["avatar_url"] = assigned_user.get("avatar_url") or ""
+    row["user_avatar_url"] = assigned_user.get("avatar_url") or ""
+    row["receiver_avatar_url"] = assigned_user.get("avatar_url") or ""
+
+    if assigned_user.get("full_name"):
+        row["user"] = assigned_user.get("full_name")
+        row["receiver"] = assigned_user.get("full_name")
+
+    if assigned_user.get("employee_code"):
+        row["employee_code"] = assigned_user.get("employee_code")
+
+    if assigned_user.get("department"):
+        row["department"] = assigned_user.get("department")
+
+    if assigned_user.get("floor"):
+        row["location"] = assigned_user.get("floor")
+
     row["assigned_at"] = serialize_datetime(row.get("assigned_at"))
     row["returned_at"] = serialize_datetime(row.get("returned_at"))
     row["created_at"] = serialize_datetime(row.get("created_at"))
@@ -484,6 +611,10 @@ def normalize_asset_payload(data):
 
     data["assigned_at"] = data.get("assigned_at") or ""
     data["returned_at"] = data.get("returned_at") or ""
+
+    data["avatar_url"] = data.get("avatar_url") or ""
+    data["user_avatar_url"] = data.get("user_avatar_url") or ""
+    data["receiver_avatar_url"] = data.get("receiver_avatar_url") or ""
 
     return data
 
@@ -935,6 +1066,9 @@ def build_update_asset_data(data):
         "employee_code",
         "user",
         "receiver",
+        "avatar_url",
+        "user_avatar_url",
+        "receiver_avatar_url",
     ]
 
     for field in optional_text_fields:
@@ -1307,6 +1441,8 @@ def assign_asset(asset_id, data):
     now = datetime.utcnow()
 
     # lưu thông tin người nhận vào tài sản
+    user_avatar_url = normalize_asset_avatar_url(user.get("avatar_url"))
+
     update_data = {
         "user_id": str(user.get("_id")),
         "employee_code": user.get("employee_code") or "",
@@ -1314,6 +1450,9 @@ def assign_asset(asset_id, data):
         "receiver": user.get("full_name") or "",
         "department": user.get("department") or "",
         "location": user.get("floor") or "",
+        "avatar_url": user_avatar_url,
+        "user_avatar_url": user_avatar_url,
+        "receiver_avatar_url": user_avatar_url,
         "status": "using",
         "assigned_at": now,
         "returned_at": "",
@@ -1356,6 +1495,9 @@ def unassign_asset(asset_id):
         "receiver": "",
         "department": "",
         "location": "",
+        "avatar_url": "",
+        "user_avatar_url": "",
+        "receiver_avatar_url": "",
         "status": "available",
         "returned_at": now,
         "updated_at": now,
@@ -1538,6 +1680,9 @@ def release_assets_when_user_inactive(user=None, user_id="", employee_code="", e
         "receiver": "",
         "department": "",
         "location": "",
+        "avatar_url": "",
+        "user_avatar_url": "",
+        "receiver_avatar_url": "",
         "status": "available",
         "returned_at": now,
         "updated_at": now,

@@ -1,11 +1,12 @@
 # File này khai báo các API liên quan đến hồ sơ cá nhân
 # Frontend gọi các API này để lấy thông tin user đang đăng nhập, cập nhật hồ sơ và đổi mật khẩu
 
-from flask import request, jsonify, session
+from flask import request, jsonify, session, current_app
 
 from templates.profile.profile_service import (
     get_my_profile,
     update_my_profile,
+    upload_my_avatar,
     change_my_password,
 )
 
@@ -50,6 +51,14 @@ def register_profile_api_routes(app):
         user_id = get_current_user_id()
         data = request.get_json(silent=True) or {}
         response, status_code = update_my_profile(user_id, data)
+        return jsonify(response), status_code
+
+    @app.route("/api/profile/avatar", methods=["POST"])
+    # API tải lên avatar mới của người đang đăng nhập
+    def api_upload_my_avatar():
+        user_id = get_current_user_id()
+        file = request.files.get("avatar")
+        response, status_code = upload_my_avatar(user_id, file, current_app.root_path)
         return jsonify(response), status_code
 
     @app.route("/api/profile/change-password", methods=["POST"])
