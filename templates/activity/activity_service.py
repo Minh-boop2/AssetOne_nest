@@ -385,7 +385,8 @@ def build_action_from_request(method, path):
     module_name_map = {
         "assets": "tài sản",
         "assign": "cấp phát",
-        "users": "người dùng",
+        "users": "thông tin người dùng",
+        "profile": "hồ sơ cá nhân",
         "mail": "mail",
         "permissions": "phân quyền",
         "reports": "báo cáo",
@@ -398,15 +399,123 @@ def build_action_from_request(method, path):
     module_name = module_name_map.get(module, module)
 
     if method == "POST":
-        return f"Tạo mới dữ liệu {module_name}"
+        return f"Tạo mới {module_name}"
 
     if method in ["PUT", "PATCH"]:
-        return f"Cập nhật dữ liệu {module_name}"
+        return f"Cập nhật {module_name}"
 
     if method == "DELETE":
-        return f"Xóa dữ liệu {module_name}"
+        return f"Xóa {module_name}"
 
-    return f"Thao tác với dữ liệu {module_name}"
+    return f"Thao tác với {module_name}"
+
+
+# Bổ sung: lấy id đối tượng từ path API, ví dụ /api/users/<id>
+def extract_object_id_from_api_path(path):
+    parts = [part for part in str(path or "").split("/") if part]
+
+    if len(parts) >= 3 and parts[0] == "api":
+        return parts[2]
+
+    return None
+
+
+# Bổ sung: lấy tên người dùng để hiển thị log cũ không còn bị hiện /api/users/<id>
+def get_user_display_name_by_id(user_id):
+    if not user_id or not is_valid_object_id(str(user_id)):
+        return None
+
+    user = users_collection.find_one(
+        {"_id": ObjectId(str(user_id))},
+        {
+            "full_name": 1,
+            "email": 1,
+            "employee_code": 1,
+        }
+    )
+
+    if not user:
+        return None
+
+    return (
+        user.get("full_name")
+        or user.get("email")
+        or user.get("employee_code")
+    )
+
+
+# Bổ sung: tên mặc định theo module khi log cũ thiếu target_name
+def get_default_target_name_by_module(module):
+    module = str(module or "").lower()
+
+    module_name_map = {
+        "users": "Người dùng",
+        "profile": "Hồ sơ cá nhân",
+        "assets": "Tài sản",
+        "assign": "Cấp phát",
+        "reports": "Báo cáo",
+        "activities": "Hoạt động",
+        "permissions": "Phân quyền",
+        "mail": "Mail",
+        "system": "Hệ thống",
+    }
+
+    return module_name_map.get(module, None)
+
+
+# Bổ sung: chuẩn hóa dữ liệu log trước khi trả về frontend/export
+def enrich_activity_display_data(activity):
+    if not activity:
+        return activity
+
+    activity = dict(activity)
+    metadata = activity.get("metadata") or {}
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    module = activity.get("module") or detect_module_from_path(activity.get("path"))
+
+    target_id = (
+        activity.get("target_id")
+        or metadata.get("target_id")
+        or metadata.get("user_id")
+        or metadata.get("asset_id")
+        or metadata.get("assign_id")
+        or metadata.get("report_id")
+        or metadata.get("id")
+        or extract_object_id_from_api_path(activity.get("path"))
+    )
+
+    target_name = (
+        activity.get("target_name")
+        or metadata.get("target_name")
+        or metadata.get("asset_name")
+        or metadata.get("full_name")
+        or metadata.get("employee_name")
+        or metadata.get("name")
+        or metadata.get("title")
+    )
+
+    # Bổ sung: nếu target_name bị lưu nhầm thành path API thì bỏ đi
+    if target_name and str(target_name).startswith("/api/"):
+        target_name = None
+
+    # Bổ sung: riêng người dùng thì ưu tiên lấy tên thật từ database
+    if not target_name and str(module or "").lower() == "users":
+        target_name = get_user_display_name_by_id(target_id)
+
+    # Bổ sung: fallback để frontend không tự lấy path /api/... ra hiển thị
+    if not target_name:
+        target_name = get_default_target_name_by_module(module)
+
+    if target_id and not activity.get("target_id"):
+        activity["target_id"] = str(target_id)
+
+    if target_name:
+        activity["target_name"] = target_name
+
+    return activity
 
 
 # Tạo 1 log hoạt động mới và lưu vào database
@@ -472,7 +581,7 @@ def create_activity_log(
     return {
         "success": True,
         "message": "Tạo log hoạt động thành công",
-        "data": activity_serializer(created_activity)
+        "data": activity_serializer(enrich_activity_display_data(created_activity))
     }, 201
 
 
@@ -862,7 +971,11 @@ def get_activities(args, current_user_id):
         .limit(limit)
     )
 
-    data = [activity_serializer(activity) for activity in activities]
+    # Bổ sung: enrich target_name trước khi trả về để không hiện /api/users/<id>
+    data = [
+        activity_serializer(enrich_activity_display_data(activity))
+        for activity in activities
+    ]
 
     total_pages = (total + limit - 1) // limit if total > 0 else 1
 
@@ -1040,7 +1153,7 @@ def get_activity_by_id(activity_id, current_user_id):
     return {
         "success": True,
         "message": "Lấy chi tiết hoạt động thành công",
-        "data": activity_serializer(activity)
+        "data": activity_serializer(enrich_activity_display_data(activity))
     }, 200
 
 
@@ -1165,13 +1278,10 @@ def format_activity_export_time(value):
 def build_activity_export_description(activity):
     action = activity.get("action") or ""
     target_name = activity.get("target_name") or ""
-    path = activity.get("path") or ""
 
+    # Bổ sung: không fallback về path nữa để tránh hiện /api/users/<id>
     if target_name:
-        return f'{action} "{target_name}"'
-
-    if path:
-        return f"{action} ({path})"
+        return f"{action} - {target_name}"
 
     return action or "Không có mô tả"
 
@@ -1230,6 +1340,9 @@ def get_activities_export(args, current_user_id):
     row_index = 2
 
     for activity in activities:
+        # Bổ sung: enrich dữ liệu trước khi export để mô tả không hiện path API
+        activity = enrich_activity_display_data(activity)
+
         full_name = (
             activity.get("full_name")
             or activity.get("email")

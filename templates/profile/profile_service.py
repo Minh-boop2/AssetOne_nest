@@ -49,9 +49,74 @@ def user_can_view_all_assets(user):
     return bool(user and user.get("role") in FULL_ASSET_ROLES)
 
 
+# Bổ sung: lấy id đối tượng từ path API, ví dụ /api/users/<id>
+def extract_object_id_from_api_path(path):
+    parts = [part for part in str(path or "").split("/") if part]
+
+    if len(parts) >= 3 and parts[0] == "api":
+        return parts[2]
+
+    return None
+
+
+# Bổ sung: lấy tên người dùng từ database để profile không hiển thị /api/users/<id>
+def get_user_display_name_by_id(user_id):
+    if not user_id or not is_valid_object_id(str(user_id)):
+        return None
+
+    user = users_collection.find_one(
+        {"_id": ObjectId(str(user_id))},
+        {
+            "full_name": 1,
+            "email": 1,
+            "employee_code": 1,
+        }
+    )
+
+    if not user:
+        return None
+
+    return (
+        user.get("full_name")
+        or user.get("email")
+        or user.get("employee_code")
+    )
+
+
+# Bổ sung: tên mặc định theo module khi log thiếu target_name
+def get_default_activity_target_name(module):
+    module = str(module or "").lower()
+
+    module_name_map = {
+        "users": "Người dùng",
+        "profile": "Hồ sơ cá nhân",
+        "assets": "Tài sản",
+        "assign": "Cấp phát",
+        "reports": "Báo cáo",
+        "activities": "Hoạt động",
+        "permissions": "Phân quyền",
+        "mail": "Mail",
+        "system": "Hệ thống",
+    }
+
+    return module_name_map.get(module, "Không xác định")
+
+
 # Chuẩn hóa 1 dòng nhật ký hoạt động để frontend profile hiển thị được
 def serialize_profile_activity(activity):
     metadata = activity.get("metadata") or {}
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    module = activity.get("module")
+    target_id = (
+        activity.get("target_id")
+        or metadata.get("target_id")
+        or metadata.get("user_id")
+        or metadata.get("id")
+        or extract_object_id_from_api_path(activity.get("path"))
+    )
 
     target_name = (
         activity.get("target_name")
@@ -61,9 +126,19 @@ def serialize_profile_activity(activity):
         or metadata.get("employee_name")
         or metadata.get("name")
         or metadata.get("title")
-        or activity.get("path")
-        or "Không xác định"
     )
+
+    # Bổ sung: nếu target_name bị lưu nhầm thành path API thì bỏ đi
+    if target_name and str(target_name).startswith("/api/"):
+        target_name = None
+
+    # Bổ sung: riêng log người dùng thì lấy tên thật từ database nếu thiếu target_name
+    if not target_name and str(module or "").lower() == "users":
+        target_name = get_user_display_name_by_id(target_id)
+
+    # Bổ sung: không fallback về activity.get("path") nữa để tránh hiện /api/users/<id>
+    if not target_name:
+        target_name = get_default_activity_target_name(module)
 
     created_at = format_datetime_vietnam(activity.get("created_at"))
 
@@ -72,9 +147,9 @@ def serialize_profile_activity(activity):
         "time": created_at or "",
         "created_at": created_at or "",
         "action": activity.get("action") or "Hoạt động",
-        "module": activity.get("module"),
+        "module": module,
         "method": activity.get("method"),
-        "target_id": str(activity.get("target_id")) if activity.get("target_id") else None,
+        "target_id": str(target_id) if target_id else None,
         "target_name": target_name,
         "asset": target_name,
     }
