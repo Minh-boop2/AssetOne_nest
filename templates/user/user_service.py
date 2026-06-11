@@ -21,8 +21,78 @@ from templates.permission.permission_model import (
 )
 
 
-# Lấy quyền của role từ database.
-# Nếu database chưa có thì lấy quyền mặc định trong DEFAULT_ROLE_PERMISSIONS.
+DENIED_ACTION_MESSAGE = "Bạn không có quyền thực hiện hành động này."
+
+
+def normalize_role_code(role):
+    role = str(role or "").strip().upper()
+
+    mapping = {
+        "ADMIN": "ADMIN",
+        "QUẢN LÝ": "QUAN_LY",
+        "QUAN_LY": "QUAN_LY",
+        "MANAGER": "QUAN_LY",
+        "NHÂN VIÊN": "NHAN_VIEN",
+        "NHAN_VIEN": "NHAN_VIEN",
+        "USER": "NHAN_VIEN",
+        "STAFF": "NHAN_VIEN",
+    }
+
+    return mapping.get(role, role)
+
+
+def user_identity_values(user):
+    user = user or {}
+
+    values = [
+        user.get("_id"),
+        user.get("id"),
+        user.get("user_id"),
+        user.get("employee_code"),
+        user.get("email"),
+    ]
+
+    return {
+        str(value).strip().lower()
+        for value in values
+        if str(value or "").strip()
+    }
+
+
+def is_same_user(current_user, target_user):
+    # NOTE: Cho QUAN_LY thao tác với chính tài khoản QUAN_LY của mình.
+    return bool(user_identity_values(current_user) & user_identity_values(target_user))
+
+
+def can_manage_user_target(current_user, target_user):
+    # NOTE: ADMIN thao tác tất cả.
+    # QUAN_LY chỉ thao tác NHAN_VIEN hoặc chính tài khoản QUAN_LY của mình.
+    if not current_user or not target_user:
+        return False
+
+    current_role = normalize_role_code(current_user.get("role"))
+    target_role = normalize_role_code(target_user.get("role"))
+
+    if current_role == "ADMIN":
+        return True
+
+    if current_role == "QUAN_LY":
+        if target_role == "NHAN_VIEN":
+            return True
+
+        if target_role == "QUAN_LY" and is_same_user(current_user, target_user):
+            return True
+
+    return False
+
+
+def denied_response():
+    return {
+        "success": False,
+        "message": DENIED_ACTION_MESSAGE,
+    }, 403
+
+
 def get_role_permissions_for_frontend(role):
     if role == ADMIN_ROLE:
         return "ALL"
@@ -35,8 +105,6 @@ def get_role_permissions_for_frontend(role):
     return DEFAULT_ROLE_PERMISSIONS.get(role, {})
 
 
-# Lấy danh sách action từ PERMISSION_MODULES.
-# Viết kiểu mềm để tránh lỗi nếu permission_model đang khai báo module hơi khác format.
 def get_module_action_map():
     module_action_map = {}
 
@@ -55,7 +123,6 @@ def get_module_action_map():
             continue
 
         actions = module.get("actions", [])
-
         action_keys = []
 
         for action in actions:
@@ -78,12 +145,6 @@ def get_module_action_map():
     return module_action_map
 
 
-# Tạo object can để frontend dùng ẩn/hiện nút.
-# Ví dụ:
-# can.users.view
-# can.users.create
-# can.users.update
-# can.users.delete
 def build_can_object(role, permissions):
     can = {}
 
@@ -98,22 +159,26 @@ def build_can_object(role, permissions):
 
         return can
 
-    if not isinstance(permissions, dict):
-        return can
+    if isinstance(permissions, dict):
+        for module_key, actions in permissions.items():
+            can[module_key] = {}
 
-    for module_key, actions in permissions.items():
-        can[module_key] = {}
+            if not isinstance(actions, list):
+                continue
 
-        if not isinstance(actions, list):
-            continue
+            for action in actions:
+                can[module_key][action] = True
 
-        for action in actions:
-            can[module_key][action] = True
+    # NOTE: Cho frontend biết QUAN_LY có thể gọi users:view/update.
+    # Sửa được đúng tài khoản nào vẫn được chặn tiếp ở can_manage_user_target().
+    if role == "QUAN_LY":
+        can.setdefault("users", {})
+        can["users"]["view"] = True
+        can["users"]["update"] = True
 
     return can
 
 
-# Gắn quyền vào user trả về frontend sau login.
 def user_serializer_with_permissions(user):
     data = user_serializer(user)
 
@@ -127,40 +192,6 @@ def user_serializer_with_permissions(user):
     return data
 
 
-# THÊM: gọi module tài sản để thu hồi tài sản khi user ngưng hoạt động
-# để import trong hàm nhằm tránh lỗi import vòng giữa user_service và asset_service
-# nếu folder của bạn là templates.asset thì chạy nhánh đầu, nếu là templates.assets thì chạy nhánh sau
-def release_assets_for_inactive_user_safely(updated_user):
-    if not updated_user:
-        return {
-            "success": False,
-            "message": "Không có dữ liệu user để thu hồi tài sản",
-            "matched_count": 0,
-            "modified_count": 0,
-        }
-
-    try:
-        try:
-            from templates.asset.asset_service import release_assets_when_user_inactive
-        except ModuleNotFoundError:
-            from templates.assets.asset_service import release_assets_when_user_inactive
-
-        return release_assets_when_user_inactive(user=updated_user)
-
-    except Exception as error:
-        # THÊM: không để lỗi thu hồi tài sản làm hỏng API cập nhật user
-        # nếu có lỗi thì API user vẫn chạy, frontend vẫn nhận được thông tin lỗi ở asset_release
-        return {
-            "success": False,
-            "message": "Cập nhật user thành công nhưng thu hồi tài sản bị lỗi",
-            "error": str(error),
-            "matched_count": 0,
-            "modified_count": 0,
-        }
-
-
-# Tạo user mới
-# Kiểm tra dữ liệu bắt buộc, role, trạng thái và trùng mã nhân viên/email trước khi lưu
 def create_user(data):
     if data is None:
         data = {}
@@ -207,7 +238,6 @@ def create_user(data):
 
     user = create_user_model(data)
     result = users_collection.insert_one(user)
-
     created_user = users_collection.find_one({"_id": result.inserted_id})
 
     return {
@@ -217,8 +247,6 @@ def create_user(data):
     }, 201
 
 
-# Lấy danh sách user
-# Có hỗ trợ phân trang, tìm kiếm và lọc theo role, trạng thái, phòng ban, tầng
 def get_users(args):
     try:
         page = int(args.get("page", 1))
@@ -280,7 +308,6 @@ def get_users(args):
     )
 
     data = [user_serializer(user) for user in users]
-
     total_pages = (total + limit - 1) // limit if total > 0 else 1
 
     return {
@@ -296,7 +323,6 @@ def get_users(args):
     }, 200
 
 
-# Lấy chi tiết một user theo id
 def get_user_by_id(id):
     if not is_valid_object_id(id):
         return {
@@ -319,9 +345,7 @@ def get_user_by_id(id):
     }, 200
 
 
-# Cập nhật thông tin user theo id
-# Có kiểm tra id, user tồn tại, role, trạng thái và trùng mã nhân viên/email
-def update_user(id, data):
+def update_user(id, data, current_user=None):
     if data is None:
         data = {}
 
@@ -338,6 +362,11 @@ def update_user(id, data):
             "success": False,
             "message": "Không tìm thấy user"
         }, 404
+
+    # NOTE: Bảo vệ API trực tiếp.
+    # QUAN_LY chỉ update được NHAN_VIEN hoặc chính tài khoản QUAN_LY của mình.
+    if current_user is not None and not can_manage_user_target(current_user, user):
+        return denied_response()
 
     if "role" in data and data.get("role") not in VALID_ROLES:
         return {
@@ -399,36 +428,15 @@ def update_user(id, data):
     )
 
     updated_user = users_collection.find_one({"_id": ObjectId(id)})
-    asset_release_result = None
 
-    # THÊM: nếu update user từ HOAT_DONG sang NGUNG_HOAT_DONG
-    # thì tự động thu hồi tài sản đang cấp cho user đó
-    # tài sản sẽ về trạng thái Chưa sử dụng, không xóa tài sản khỏi hệ thống
-    if (
-        updated_user
-        and data.get("status") == "NGUNG_HOAT_DONG"
-        and user.get("status") != "NGUNG_HOAT_DONG"
-    ):
-        asset_release_result = release_assets_for_inactive_user_safely(updated_user)
-
-    response = {
+    return {
         "success": True,
         "message": "Cập nhật user thành công",
         "data": user_serializer(updated_user)
-    }
-
-    # THÊM: trả thêm kết quả thu hồi tài sản nếu có phát sinh thu hồi
-    # frontend cũ không dùng field này thì vẫn không bị ảnh hưởng
-    if asset_release_result is not None:
-        response["asset_release"] = asset_release_result
-
-    return response, 200
+    }, 200
 
 
-# Xóa user theo id
-# Trong nghiệp vụ hiện tại: xóa nhân sự = chuyển sang trạng thái đã nghỉ
-# Không xóa record khỏi MongoDB để trang thống kê vẫn đếm được nhân viên đã nghỉ
-def delete_user(id):
+def delete_user(id, current_user=None):
     if not is_valid_object_id(id):
         return {
             "success": False,
@@ -443,6 +451,10 @@ def delete_user(id):
             "message": "Không tìm thấy user"
         }, 404
 
+    # NOTE: Bảo vệ API delete/ngưng hoạt động trực tiếp.
+    if current_user is not None and not can_manage_user_target(current_user, user):
+        return denied_response()
+
     users_collection.update_one(
         {"_id": ObjectId(id)},
         {
@@ -455,21 +467,13 @@ def delete_user(id):
 
     updated_user = users_collection.find_one({"_id": ObjectId(id)})
 
-    # THÊM: khi xóa user theo nghiệp vụ hiện tại là chuyển sang trạng thái ngưng hoạt động
-    # nên cũng tự động thu hồi toàn bộ tài sản đang cấp cho user đó
-    # tài sản sẽ về trạng thái Chưa sử dụng, không xóa tài sản khỏi hệ thống
-    asset_release_result = release_assets_for_inactive_user_safely(updated_user)
-
     return {
         "success": True,
         "message": "Nhân viên đã được chuyển sang trạng thái đã nghỉ",
-        "data": user_serializer(updated_user),
-        "asset_release": asset_release_result
+        "data": user_serializer(updated_user)
     }, 200
 
 
-# Đăng nhập user
-# Trả thêm permissions và can để frontend ẩn/hiện nút
 def login_user(data):
     if data is None:
         data = {}
@@ -518,8 +522,6 @@ def login_user(data):
     }, 200
 
 
-# Đếm số lượng user theo một field bất kỳ
-# Ví dụ: đếm theo role, status, department hoặc floor
 def aggregate_counts(field_name):
     pipeline = [
         {
@@ -551,8 +553,6 @@ def aggregate_counts(field_name):
     }
 
 
-# Lấy thống kê tổng quan user
-# Bao gồm tổng user, số lượng theo role, trạng thái, phòng ban và tầng
 def get_users_stats():
     total = users_collection.count_documents({})
 
@@ -585,8 +585,6 @@ def get_users_stats():
     }, 200
 
 
-# Lấy danh sách user theo một hoặc nhiều role
-# Chỉ lấy user còn hoạt động để dùng cho notification hoặc phân quyền
 def get_users_by_roles(roles):
     if not isinstance(roles, list):
         roles = [roles]
@@ -599,16 +597,13 @@ def get_users_by_roles(roles):
     return [user_serializer(user) for user in users]
 
 
-# Lấy danh sách ADMIN và QUAN_LY còn hoạt động
 def get_admin_and_manager_users():
     return get_users_by_roles(["ADMIN", "QUAN_LY"])
 
 
-# Lấy danh sách ADMIN còn hoạt động
 def get_admin_users():
     return get_users_by_roles(["ADMIN"])
 
 
-# Lấy danh sách QUAN_LY còn hoạt động
 def get_manager_users():
     return get_users_by_roles(["QUAN_LY"])

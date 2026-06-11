@@ -298,6 +298,23 @@ def map_assign_status_to_asset_status_values(status):
     return []
 
 
+# Tách danh sách loại thiết bị được chọn từ checkbox filter.
+# Ví dụ frontend gửi: "pc,laptop,printer" => ["pc", "laptop", "printer"].
+def normalize_assign_type_filter(asset_type):
+    if not asset_type:
+        return []
+
+    selected_types = []
+
+    for item in str(asset_type).split(","):
+        value = item.strip()
+
+        if value and value != "Tất cả" and value not in selected_types:
+            selected_types.append(value)
+
+    return selected_types
+
+
 # Chuẩn hóa dữ liệu tài sản thành dữ liệu cấp phát để trả về frontend.
 # Vì assign đang lấy từ assets_collection nên cần đổi tên field cho dễ dùng.
 def normalize_assign_from_asset(item):
@@ -432,14 +449,22 @@ def build_assign_query(
             ]
         })
 
-    if asset_type and asset_type != "Tất cả":
+    # Lọc loại thiết bị.
+    # Hỗ trợ cả 1 loại và nhiều loại từ checkbox: type=pc,laptop,printer.
+    selected_types = normalize_assign_type_filter(asset_type)
+
+    if selected_types:
         conditions.append({
             "$or": [
                 {
-                    "type": asset_type
+                    "type": {
+                        "$in": selected_types
+                    }
                 },
                 {
-                    "category": asset_type
+                    "category": {
+                        "$in": selected_types
+                    }
                 },
             ]
         })
@@ -553,6 +578,7 @@ def list_assigns(
     status="Tất cả",
     location="Tất cả",
     current_user=None,
+    include_counts=True,
 ):
     try:
         page = int(page)
@@ -616,7 +642,13 @@ def list_assigns(
             "total_items": total_items,
             "total_pages": total_pages,
         },
-        "filter_counts": get_assign_filter_counts(current_user=current_user),
+        # NOTE: Mặc định vẫn tính counts như cũ.
+        # Khi frontend fetch table gửi include_counts=0 thì bỏ qua phần này để load nhanh.
+        "filter_counts": (
+            get_assign_filter_counts(current_user=current_user)
+            if include_counts
+            else {}
+        ),
         "scope": {
             "view_all": user_can_view_all_assigns(current_user),
             "role": current_user.get("role") if current_user else None,

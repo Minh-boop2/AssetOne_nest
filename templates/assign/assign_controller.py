@@ -83,6 +83,16 @@ def get_assign_receiver(assign):
     )
 
 
+def parse_bool_arg(name, default=True):
+    # NOTE: Cho phép frontend tắt phần nặng như filter_counts khi chỉ reload table.
+    raw = request.args.get(name)
+
+    if raw is None:
+        return default
+
+    return str(raw).strip().lower() not in ["0", "false", "no", "off"]
+
+
 # Gom thông tin cấp phát thành metadata để lưu vào log hoạt động.
 # Metadata giúp xem lại trước đó thao tác đã tác động tới tài sản nào.
 def build_assign_metadata(assign):
@@ -283,6 +293,9 @@ def register_assign_api_routes(app):
                 status=status,
                 location=location,
                 current_user=current_user,
+                # NOTE: Mặc định vẫn giữ logic cũ là có counts.
+                # Chỉ khi /assign fetch table gửi include_counts=0 thì mới bỏ qua.
+                include_counts=parse_bool_arg("include_counts", True),
             )
         ), 200
 
