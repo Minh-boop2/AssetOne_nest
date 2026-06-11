@@ -55,7 +55,7 @@ def register_users_api_routes(app):
         data = request.get_json(silent=True) or {}
         current_user = get_current_user_from_request()
 
-        # NOTE: Truyền user hiện tại xuống service để kiểm tra QUAN_LY được sửa ai.
+        # NOTE: Truyền current_user xuống service để QUAN_LY chỉ sửa nhân viên hoặc chính mình.
         response, status_code = update_user(
             id,
             data,
@@ -69,7 +69,7 @@ def register_users_api_routes(app):
     def api_delete_user(id):
         current_user = get_current_user_from_request()
 
-        # NOTE: Giữ bảo vệ ở API delete nếu sau này mở quyền xóa/ngưng hoạt động bằng DELETE.
+        # NOTE: Giữ bảo vệ API nếu sau này dùng DELETE để ngưng hoạt động.
         response, status_code = delete_user(
             id,
             current_user=current_user,

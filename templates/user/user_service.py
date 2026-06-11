@@ -22,6 +22,8 @@ from templates.permission.permission_model import (
 
 
 DENIED_ACTION_MESSAGE = "Bạn không có quyền thực hiện hành động này."
+MIN_CREATE_PASSWORD_LENGTH = 6
+MIN_UPDATE_PASSWORD_LENGTH = 4
 
 
 def normalize_role_code(role):
@@ -169,8 +171,8 @@ def build_can_object(role, permissions):
             for action in actions:
                 can[module_key][action] = True
 
-    # NOTE: Cho frontend biết QUAN_LY có thể gọi users:view/update.
-    # Sửa được đúng tài khoản nào vẫn được chặn tiếp ở can_manage_user_target().
+    # NOTE: QUAN_LY được mở nút users:view/update ở frontend.
+    # Việc được sửa đúng tài khoản nào vẫn kiểm tra ở can_manage_user_target().
     if role == "QUAN_LY":
         can.setdefault("users", {})
         can["users"]["view"] = True
@@ -205,11 +207,15 @@ def create_user(data):
                 "message": f"Thiếu trường bắt buộc: {field}"
             }, 400
 
-    if len(data.get("password")) < 6:
+    password = str(data.get("password") or "").strip()
+
+    if len(password) < MIN_CREATE_PASSWORD_LENGTH:
         return {
             "success": False,
-            "message": "Mật khẩu phải có ít nhất 6 ký tự"
+            "message": f"Mật khẩu phải có ít nhất {MIN_CREATE_PASSWORD_LENGTH} ký tự"
         }, 400
+
+    data["password"] = password
 
     if data.get("role") not in VALID_ROLES:
         return {
@@ -363,8 +369,8 @@ def update_user(id, data, current_user=None):
             "message": "Không tìm thấy user"
         }, 404
 
-    # NOTE: Bảo vệ API trực tiếp.
-    # QUAN_LY chỉ update được NHAN_VIEN hoặc chính tài khoản QUAN_LY của mình.
+    # NOTE: Chặn direct API.
+    # QUAN_LY chỉ được update NHAN_VIEN hoặc chính tài khoản QUAN_LY của mình.
     if current_user is not None and not can_manage_user_target(current_user, user):
         return denied_response()
 
@@ -407,14 +413,19 @@ def update_user(id, data, current_user=None):
 
     update_data = update_user_model(data)
 
-    if "password" in data and data.get("password"):
-        if len(data.get("password")) < 6:
-            return {
-                "success": False,
-                "message": "Mật khẩu phải có ít nhất 6 ký tự"
-            }, 400
+    # NOTE: Quản lý/Admin được đổi mật khẩu nhân viên ở màn chỉnh sửa.
+    # Để trống password thì không đổi mật khẩu.
+    if "password" in data:
+        password = str(data.get("password") or "").strip()
 
-        update_data["password_hash"] = generate_password_hash(data.get("password"))
+        if password:
+            if len(password) < MIN_UPDATE_PASSWORD_LENGTH:
+                return {
+                    "success": False,
+                    "message": f"Mật khẩu mới phải có ít nhất {MIN_UPDATE_PASSWORD_LENGTH} ký tự"
+                }, 400
+
+            update_data["password_hash"] = generate_password_hash(password)
 
     if not update_data:
         return {

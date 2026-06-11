@@ -17,8 +17,8 @@ from templates.permission.permission_model import (
 )
 
 
-# NOTE: Tạo index role để mỗi role chỉ có một bản ghi quyền.
 def ensure_permission_indexes():
+    # NOTE: Tạo index role để mỗi role chỉ có một bản ghi quyền.
     try:
         permissions_collection.create_index("role", unique=True)
     except Exception:
@@ -28,9 +28,8 @@ def ensure_permission_indexes():
 ensure_permission_indexes()
 
 
-# NOTE: Lấy user hiện tại từ request.
-# Frontend cần gửi X-User-Id hoặc current_user_id.
 def get_current_user_from_request():
+    # NOTE: Lấy user hiện tại từ header/query/body để check quyền API.
     user_id = request.headers.get("X-User-Id")
 
     if not user_id:
@@ -40,16 +39,12 @@ def get_current_user_from_request():
         data = request.get_json(silent=True) or {}
         user_id = data.get("current_user_id")
 
-    if not user_id:
-        return None
-
-    if not ObjectId.is_valid(user_id):
+    if not user_id or not ObjectId.is_valid(user_id):
         return None
 
     return users_collection.find_one({"_id": ObjectId(user_id)})
 
 
-# NOTE: Lấy quyền theo role từ database, nếu chưa có thì dùng quyền mặc định.
 def get_role_permissions_from_db(role):
     permission_doc = permissions_collection.find_one({"role": role})
 
@@ -59,11 +54,10 @@ def get_role_permissions_from_db(role):
     return DEFAULT_ROLE_PERMISSIONS.get(role, {})
 
 
-# NOTE: Kiểm tra quyền API.
-# ADMIN toàn quyền.
-# QUAN_LY được gọi users:view và users:update.
-# Còn được sửa ai thì kiểm tra tiếp trong user_service.py.
 def user_has_permission(user, module_key, action):
+    # NOTE: ADMIN toàn quyền.
+    # QUAN_LY được gọi users:view và users:update.
+    # QUAN_LY được sửa ai sẽ kiểm tra tiếp trong user_service.py.
     if not user:
         return False
 
@@ -87,7 +81,6 @@ def user_has_permission(user, module_key, action):
     return action in module_permissions
 
 
-# NOTE: Decorator bảo vệ API theo module/action.
 def permission_required(module_key, action):
     def decorator(func):
         @wraps(func)
@@ -113,7 +106,6 @@ def permission_required(module_key, action):
     return decorator
 
 
-# NOTE: Tạo hoặc cập nhật quyền mặc định cho các role.
 def seed_default_permissions():
     created = []
     updated = []
